@@ -13,6 +13,6 @@ Metagenome-assembled genomes can be found in an Anvi'o result at zenodo open-acc
 In the succesion experiment folder you can find Analysis_succession.Rmd code and the corresponding data (in the Data folder) to reproduce most if not all of the analysis and figures. 
 The Data folder contains the raw and normilized OTUs tables, taxonomy assignments and metabolomics results in a table formats.
 
-### Raw sequancses
+### Raw sequences
 Metagenomics shotgun \& 16S rRNA gene amplicon sequencing are available in the European Nucleotide Archive under primary accession PRJEB39357.
 
