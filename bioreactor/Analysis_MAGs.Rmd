@@ -1,0 +1,1072 @@
+---
+title: "Analysis of Benzene Multi-omics on bioreactor samples"
+author: "Chrats Melkonian"
+date: "Reformated at April 2020"
+output: html_document3
+---
+
+```{r setup, include=FALSE, cache=FALSE}
+libs <- c('apcluster','ShortRead','ggrepel', 'ggplot2','kableExtra', 'readxl', 'readr', 'party', 'knitr', 'cowplot')
+invisible(lapply(libs, library, character.only = TRUE))
+
+# ggplot theme
+theme_set(theme_bw())
+
+# global chunk options
+opts_chunk$set(
+  fig.path='_Figures/fig-', cache.path='_Knitr/cache/fig-', 
+  fig.width=5, fig.height=5, fig.align='center', 
+  dev=c('png','pdf'), dpi=300,
+  cache=TRUE,
+  warning=FALSE, message=FALSE, error=FALSE,
+  echo=FALSE)
+# read_chunk('Scripts/analysis.R')
+```
+
+# Multi-omics analysis of the benzene bioreactor.
+```{r loadingdata}
+################################################################################################
+########### Add in variabe dir the path to Data from the bioreactor samples and on table5 chunk.
+################################################################################################
+dir<-".../anaerobic-benzene-degrading-culture/bioreactor/Data"
+rna_count <- read.csv(paste(dir,"/total_mRNA_perSample.csv",sep = ""))
+rna_reads<-as.vector(rna_count)
+rna_reads<-rna_reads[-1]
+
+
+path=paste(dir,"/bins_bowtie_rna_mapped",sep = "")
+inp<-list.files(path = path)
+inp_mod<-substr(x = inp, 1,7)
+# Read and nomilization of RNA
+orf_rna_tables<-list()
+j<-1
+for (i in inp){ 
+  table_rna <- read.csv(paste(path,i,sep = "/"))
+  table<-as.matrix(table_rna[,3:7])
+  orf_rna_tables[[j]]<-table
+  j<-j+1
+}
+names(orf_rna_tables)<-inp_mod
+
+mil<-1000000
+biofilm_rna<-c()
+liguid_rna<-c()
+for (i in 1:length(orf_rna_tables)){ 
+
+  b<-rowSums(orf_rna_tables[[i]][,1:2])/sum(rna_reads[1:2])
+  l<-rowSums(orf_rna_tables[[i]][,3:5])/sum(rna_reads[3:5])
+  biofilm_rna<-c(biofilm_rna,sum(b)*mil)
+  liguid_rna<-c(liguid_rna,sum(l)*mil)
+}
+names(biofilm_rna)<-inp_mod
+names(liguid_rna)<-inp_mod
+#selection of high quality refined MAGs
+output <- read.delim(paste(dir,"/bins_summary.txt",sep = ""))
+output$bins<-substr(x =output$bins, 1,7)
+output_g<-output[which(output$percent_completion> 90 ),]
+output_g<-output_g[-which(output_g$percent_redundancy> 13 ),]
+mixed<-c( "bin_013","bin_035","bin_037","bin_058","bin_059")
+output_gg<-output_g[!output_g$bins%in%mixed,]
+good_bins<-output_gg[,1]
+
+#ABUNDANCE
+bins_abund <- read.delim(paste(dir,"/abundance.txt",sep = ""))
+bins_abund$bins<-substr(x = bins_abund$bins, 1,7)
+Genome_size<-output$total_length
+abuandances<-rowMeans(bins_abund[,2:3])
+
+bins<-inp_mod
+accepted<-as.integer(bins%in%good_bins)
+
+# Calculate gene active ratio
+FT_active_genes<-list()
+f<-1
+for (i in 1:length(orf_rna_tables)){ 
+  table_rna <- orf_rna_tables[[i]]
+  vector_active_orf<-ifelse(rowMeans(table_rna)>=1 , T , F)
+  FT_active_genes[[f]]<-table(vector_active_orf)
+  f<-f+1
+}
+active<-unlist(lapply(FT_active_genes, function(x) x[2]))
+inactive<-lapply(FT_active_genes, function(x) x[1])
+active[is.na(active)] <- 0
+active_ratio<-(active/(unlist(inactive)+active))*100
+names(active_ratio)<-bins
+
+#
+log2ratio_B_L<-log2(biofilm_rna/liguid_rna)
+data<-as.data.frame(cbind(abuandances,active_ratio,biofilm_rna,liguid_rna,bins,accepted))
+data$log2ratio_B_L<-log2ratio_B_L
+data$genome_size<-Genome_size
+data_log<-data
+
+data_log[,1:4]<-apply(as.matrix(data[,1:4]),2,function(x) log2(as.numeric(x)))
+data[,1:4]<-apply(as.matrix(data[,1:4]),2,function(x) as.numeric(x))
+```
+
+```{r stat_test}
+ab_test<-log2(data$abuandances)
+qqnorm(ab_test);plot(density(ab_test));shapiro.test(ab_test)
+qqnorm(data_log$abuandances);plot(density(data_log$abuandances));shapiro.test(data$abuandances)
+qqnorm(data_log$biofilm_rna);plot(density(data_log$biofilm_rna));shapiro.test(data_log$biofilm_rna)
+
+
+wilcox.test(data$abuandances[which(data$accepted==1)],data$abuandances[which(data$accepted==0)],paired = F,conf.int=T)
+wilcox.test(data$biofilm_rna[which(data$accepted==1)],data$biofilm_rna[which(data$accepted==0)],paired = F,conf.int=T)
+wilcox.test(data$liguid_rna[which(data$accepted==1)],data$liguid_rna[which(data$accepted==0)],paired = F,conf.int=T)
+```
+
+## Correlation between MAGs mRNA abundance (biofilm & liquid) with DNA abundance 
+```{r plot1}
+#prepare plots
+levels(data_log$accepted) <- c("Bad", "Good")
+axis_minb <- min(c(data_log$mean_bin_rna_coverage,data_log$abuandances))
+axis_maxb <-max(c(data_log$mean_bin_rna_coverage,data_log$abuandances))
+
+axis_minl <- min(c(data_log$biofilm_rna,data_log$liguid_rna))
+axis_maxl <-max(c(data_log$biofilm_rna,data_log$liguid_rna))
+data_log$bins<-gsub("bin_","",data_log$bins)
+size_all<-15
+colors_gb<-c("grey60","black")
+p1<-ggplot(data_log, aes(x=abuandances, y=biofilm_rna,shape=accepted,color=accepted))+ylim(c(axis_minl,axis_maxl))+
+  geom_point(size=3)+scale_shape_manual("Bin quality",values=c(15,19))+scale_color_manual("Bin quality",values=colors_gb)+
+  geom_text_repel(parse  = TRUE,data=subset(data_log, ((biofilm_rna > mean(biofilm_rna))&(abuandances > mean(abuandances)))),aes(label=bins))+
+  stat_smooth(method=lm, na.rm = TRUE, fullrange= F,
+              aes(group=1),colour="black")+ labs(x="DNA Abundance",y="RNA Abundance - Biofilm")+ theme(text = element_text(size=size_all),
+plot.title = element_text(size=size_all ),
+axis.title.x = element_text(size=size_all),
+axis.title.y = element_text( size=size_all),legend.title = element_text(size=size_all),
+legend.text = element_text(size=size_all))
+
+m <- lm(data_log$abuandances ~ data_log$biofilm_rna, data_log);
+eq <- substitute(italic(y) == a + b %.% italic(x)*","~~italic(r)^2~"="~r2, 
+                 list(a = format(unname(coef(m)[1]), digits = 2),
+                      b = format(unname(coef(m)[2]), digits = 2),
+                      r2 = format(summary(m)$r.squared, digits = 3)))
+
+
+
+p2<-ggplot(data_log, aes(x=abuandances, y=liguid_rna,shape=accepted,color=accepted))+ylim(c(axis_minl,axis_maxl))+
+  geom_point(size=3)+scale_shape_manual("Bin quality",values=c(15,19))+scale_color_manual("Bin quality",values=colors_gb)+
+  geom_text_repel(parse  = TRUE,data=subset(data_log, ((liguid_rna > mean(liguid_rna))&(abuandances > mean(abuandances)))),aes(label=bins))+
+  stat_smooth(method=lm, na.rm = TRUE, fullrange= F, aes(group=1),colour="black")+
+  labs(x="DNA Abundance",y="RNA Abundance - Liquid")+ theme(text = element_text(size=size_all),
+plot.title = element_text(size=size_all),
+axis.title.x = element_text(size=size_all),
+axis.title.y = element_text( size=size_all), 
+legend.title = element_text(size=size_all),
+legend.text = element_text(size=size_all))
+
+m <- lm(data_log$abuandances ~ data_log$liguid_rna, data_log);
+eq <- substitute(italic(y) == a + b %.% italic(x)*","~~italic(r)^2~"="~r2, 
+                 list(a = format(unname(coef(m)[1]), digits = 2),
+                      b = format(unname(coef(m)[2]), digits = 2),
+                      r2 = format(summary(m)$r.squared, digits = 3)))
+
+
+
+
+```
+
+
+```{r print_plot1, fig.width=12.5}
+#visualize plot
+prow <- plot_grid(p1 + theme(legend.position="none"),
+                  p2 + theme(legend.position="none"), 
+                  labels=c("a", "b"), ncol = 2, nrow = 1, label_fontface = "bold",label_size=25,align = "hv")
+legend <- get_legend(p1)
+plot_grid(prow, legend, rel_widths = c(2, .5))
+# ggsave("RNA_lb_DNA.pdf", units="in", width=12.5, height=5, dpi=300)
+```
+
+
+```{r plot_2_main}
+#spesific RNA abundance and visualize plot mRNA liquid vs mRNA biofilm
+data$biofilm_rna_norm_log<-log2((data$biofilm_rna/data$genome_size)*mean(data$genome_size))
+data$liguid_rna_norm_log<-log2((data$liguid_rna/data$genome_size)*mean(data$genome_size))
+data$biofilm_rna_norm<-(data$biofilm_rna/data$genome_size)*mean(data$genome_size)
+data$liguid_rna_norm<-(data$liguid_rna/data$genome_size)*mean(data$genome_size)
+data$ratio_B_L_norm<-log2(((data$biofilm_rna/data$genome_size)*mean(data$genome_size))/((data$liguid_rna/data$genome_size)*mean(data$genome_size)))
+                                                                                                                                                                                                                                                                   
+levels(data$accepted) <- c("Bad", "Good")
+data_good<-data[which(data$accepted=="Good"),]
+axis_min <- min(c(data$biofilm_rna_norm_log,data$liguid_rna_norm_log))
+axis_max <-max(c(data$biofilm_rna_norm_log,data$liguid_rna_norm_log))
+
+data$bins<-gsub("bin_","",data$bins)
+
+dataf<-data[!data$genome_size<10^6,] # filter based on size
+
+q1<-ggplot(dataf, aes(x=liguid_rna_norm_log, y=biofilm_rna_norm_log,color=accepted)) +
+  geom_point(aes(size=active_ratio))+xlim(axis_min, axis_max)+ylim(axis_min, axis_max)+scale_color_manual("MAG quality",values=c("grey60","black"))+
+  geom_text_repel(size=5,parse  = TRUE,box.padding = 0.4,data=subset(dataf, ((liguid_rna_norm_log > 9)&(biofilm_rna_norm_log > 9))),aes(label=bins))+
+  geom_segment(aes(x = 1, y = 1, xend = 18, yend = 18),color="red")+
+  labs(size="Active Genes %",x="Specific RNA Abundance - Liquid",y="Specific RNA Abundance - Biofilm")+ theme(text = element_text(size=size_all),plot.title = element_text(size=size_all),
+axis.title.x = element_text(size=size_all),
+axis.title.y = element_text( size=size_all),
+legend.title = element_text(size=size_all),
+legend.text = element_text(size=size_all))+ guides(colour = guide_legend(override.aes = list(size=4)),shape = guide_legend(override.aes = list(size=4)))
+q1
+```
+
+
+
+```{r table1}
+
+####
+####################################### 
+########relative table
+biofilm_rna_s<-((data$biofilm_rna/data$genome_size)*mean(data$genome_size))
+liguid_rna_s<-((data$liguid_rna/data$genome_size)*mean(data$genome_size))
+Ra<-cbind(bins_abund,(bins_abund[,2]/sum(bins_abund[,2]))*100,(bins_abund[,3]/sum(bins_abund[,3]))*100)
+Ra<-cbind(bins_abund,(abuandances/sum(abuandances))*100)
+Ra<-cbind(Ra,(biofilm_rna_s/sum(biofilm_rna_s))*100,(liguid_rna_s/sum(liguid_rna_s))*100)
+Ra_sel<-Ra[c(1,3,5,6,9,18,20)+1,4:6]
+Ra_f<-Ra[,4:6]
+colnames(Ra_f)<-c("DNA","RNA - Biofilm","RNA - Liquid")
+rownames(Ra_sel)<-c("001","003","005","006","009","018","020")
+```
+
+## Prepare tables
+```{r table2}
+output <- read.delim(paste(dir,"/bins_summary.txt",sep = ""))
+output$bins<-substr(x =output$bins, 1,7)
+output<-output[,-2]
+path_orfn<-paste(dir,"/Bins_orfs_DNA",sep = "")
+inp_total<-list.files(path = path_orfn)
+library(ShortRead)
+orf_count<-c()
+for (i in inp_total){
+  temp<-readDNAStringSet((paste(path_orfn,i,sep = "/")))
+  orf_count<-c(orf_count,length(temp))
+}
+names(orf_count)<-substr(x =inp_total, 1,7)
+```
+
+```{r table3}
+output$bins<-gsub("bin_","",output$bins)
+table_all<-cbind(output,Ra_f,orf_count)
+rownames(table_all)<-make.unique(table_all$bins)
+library(xtable)
+Sums<-colSums(table_all[,-1])
+# xtable(rbind(table_all[,-1],Sums))
+```
+
+## MAGs dentogram of functional landscape
+
+```{r UMAP}
+## KO/MAGs table 
+read_data<-function(path){
+  data <- read.csv(path)
+  rownames(data)<-data[,1]
+  data<-data[,-1]
+  data<-t(data)
+  data
+}
+benzen_ko1<-read_data(paste(dir,"/KO_tables/benzene_ko_binary.csv",sep = ""))
+rownames(benzen_ko1)<-substr(x = rownames(benzen_ko1), 1,7)
+benzen_ko1<-benzen_ko1[-c(3,5,11),]
+
+
+apres2<-apcluster(corSimMat(method = "pearson"),benzen_ko1,q=0.9)
+aggres2 <- aggExCluster(x=apres2)
+plot(aggres2)
+apres2<-apcluster(corSimMat(method = "pearson"),benzen_ko1,q=0.1)
+
+colors_same<-c('#543005','#35978f','#bf812d','#dfc27d','#c7eae5','#80cdc1','#8c510a','#003c30')
+temp<-apres2@clusters
+names(temp)<-paste("Cluster",1:8,sep = "_")
+final_clust<-unlist(lapply(strsplit(names(unlist(temp)),"[.]"), function(x) x[1]))
+names(final_clust)<-unlist(lapply(strsplit(names(unlist(temp)),"[.]"), function(x) x[2]))
+cluster_col_dna<-as.factor(final_clust[match(rownames(benzen_ko1),names(final_clust))])
+
+# Read mRNA-KO/MAGs table
+benzen_ko_all<-read.csv(paste(dir,"/KO_tables_rna/benzene_rna_a_norm_BioLiq.csv",sep = ""))
+benzen_ko_act_log<-as.matrix(benzen_ko_all)
+benzen_ko_act_log<-log2(benzen_ko_act_log)
+benzen_ko_act_log[is.infinite(benzen_ko_act_log)]<-0
+rownames(benzen_ko_act_log)<-paste(rownames(benzen_ko_act_log),"_ronly",sep = "")
+
+rna_pres_abs<-benzen_ko_act_log
+rna_pres_abs[rna_pres_abs>0]<-1
+rna_pres_abs<-rna_pres_abs[-c(3,5,11),]
+
+active_ko<-data.frame(row.names = rownames(benzen_ko1))
+active_ko$ko_count<-rowSums(benzen_ko1)
+active_ko$active_ko_count<-rowSums(rna_pres_abs)
+active_ko$names<-gsub("bin_","",rownames(benzen_ko1))
+active_ko$group_dna <- cluster_col_dna
+active_ko$active_ratio<-active_ratio[match(active_ko$names,gsub("bin_","",names(active_ratio)))]
+orfs_count<-unlist(lapply(orf_rna_tables, nrow))
+names(orfs_count)<-gsub("bin_","",names(orfs_count))
+active_ko$orf_count<-orfs_count[match(active_ko$names,names(orfs_count))]
+ratio_ko_orfs<-(active_ko$ko_count/active_ko$orf_count)*100
+names(ratio_ko_orfs)<-active_ko$names
+active_ko$ratio_ko_orfs<-ratio_ko_orfs
+```
+
+## Heatmap of clustering result of the MAGs
+```{r heatmap,fig.width= 7}
+#colors don't match with the main figure
+rownames(apres2@sim)<-gsub("bin_","",rownames(apres2@sim))
+colors_same1<-c('#8c510a','#dfc27d','#bf812d','#35978f','#80cdc1','#f6e8c3','#c7eae5','#01665e')
+heatmap(apres2,sideColors=colors_same1,col=terrain.colors(12),dendScale=1,main="",cexRow=0.7,cexCol=0,Colv=NA,legend="col")
+```
+
+```{r print_plot_3,fig.width=7}
+# Supplementary figure
+active_ko$group_dna<-gsub("_"," ",active_ko$group_dna)
+p_ko_a<-ggplot(active_ko, aes(x=ko_count, y=active_ko_count)) +scale_colour_manual(name="Clusters", values= colors_same)+scale_linetype_identity()+
+  geom_point(aes(color=group_dna,size=ratio_ko_orfs))+xlim(0, 2500)+ylim(0, 2500)+geom_segment(aes(x = 1750, y = 0, xend = 1750, yend = 2500,linetype="dashed"))+
+  geom_segment(aes(x = 0, y = 0, xend = 2500, yend = 2500))+guides(colour = guide_legend(override.aes = list(size=4)))+
+  geom_text_repel(size=4,parse  = TRUE,aes(label=names,color=group_dna),point.padding = 0.1)+
+  labs(size="KO ann. ratio %",x="KO count",y="Transcribed KO count")+ theme(text = element_text(size=size_all),
+plot.title = element_text(size=size_all),
+axis.title.x = element_text(size=size_all),
+axis.title.y = element_text( size=size_all),legend.title = element_text(size=size_all),
+legend.text = element_text(size=size_all))
+
+plot(p_ko_a)
+# ggsave("ratio_active_KOs.pdf", units="in", width=12.5, height=5, dpi=300)
+
+
+```
+
+
+```{r plot_4}
+# UMAP on Pearson correlation on different neighbors parameter
+library(uwot)
+seq_nn<-seq(15,30,1)
+embedding_l<-lapply(seq_nn, function(x) umap(cor(t(benzen_ko1),method = "pearson"),n_neighbors = x,n_epochs=1000))
+# select best fit
+# lapply(embedding_l,function(x) plot(x))
+```
+
+```{r plot_4}
+df_out <- as.data.frame(embedding_l[[11]])### nn 23
+rownames(df_out)<-colnames(t(benzen_ko1))
+df_out$group_dna <- cluster_col_dna
+df_out$names<-rownames(df_out)
+df_out$names<-gsub("bin_","",df_out$names)
+best<-c("009","005","006","003","001","020","018")
+Best<-rep("Low",nrow(df_out))
+Best[match(best,df_out$names)]<-"High"
+df_out$Best<-Best
+
+colors_same<-c('#543005','#35978f','#bf812d','#dfc27d','#c7eae5','#80cdc1','#8c510a','#003c30')
+library(ggplot2)
+library(ggrepel)
+#
+temp_n<-gsub("bin_","",as.character(data_good$bins))
+data_good_ord<-data_good[match(df_out$names,temp_n),]
+df_big<-cbind(df_out,data_good_ord)
+
+orfs_count<-unlist(lapply(orf_rna_tables, nrow))
+names(orfs_count)<-gsub("bin_","",names(orfs_count))
+df_big$orf_count<-orfs_count[match(df_out$names,names(orfs_count))]
+
+
+ratio_ko_orfs<-(active_ko$ko_count/df_big$orf_count)*100
+names(ratio_ko_orfs)<-df_big$names
+df_big$ratio_ko_orfs<-ratio_ko_orfs
+
+df_big$group_dna<-gsub("_"," ",df_big$group_dna)
+size_all<-15
+df_big$Groups<-df_big$group_dna
+df_big$Groups[grep("3|8",df_big$Groups)]<-"Group A"
+df_big$Groups[grep("6|7|4",df_big$Groups)]<-"Group B"
+df_big$Groups[grep("2|5|1",df_big$Groups)]<-"Group C"
+
+umap<-ggplot(df_big,aes(x=V1,y=V2))+scale_colour_manual(name="Clusters", values= colors_same)+scale_shape_manual(values=c(19,18))+
+  geom_point(aes(color=group_dna,shape=Best),size=4,stroke=2)+stat_ellipse(aes(x=V1, y=V2,lty=Groups, group=Groups),type = "norm")+scale_linetype_manual(values=c(3,2,1))+
+  guides(colour = guide_legend(override.aes = list(size=4)),shape = guide_legend(override.aes = list(size=4)))+ labs(shape="Transcribed KO ratio",x="UMAP1",y="UMAP2")+
+  geom_text_repel(size=4,parse  = TRUE,aes(label=names,color=group_dna),point.padding = 0.3)+ theme(text = element_text(size=size_all),
+                                                                                                    plot.title = element_text(size=size_all),
+                                                                                                    axis.title.x = element_text(size=size_all),
+                                                                                                    axis.title.y = element_text( size=size_all), 
+                                                                                                    legend.title = element_text(size=size_all),
+                                                                                                    legend.text = element_text(size=size_all))+
+  geom_point(data=subset(df_big,df_big$Best=="High"),stroke=1.5,color="black")
+plot(umap)
+```
+## Main figure 1 of the manuscript:
+
+```{r print_mainplot1,fig.width=15}
+
+prow <- plot_grid(q1 + theme(legend.position="none"),
+                  umap + theme(legend.position="none"), 
+                  labels=c("a", "b"), ncol = 2, nrow = 1, label_fontface = "bold",label_size=25)
+legend1 <- get_legend(q1)
+legend2 <- get_legend(umap)
+prow2<-plot_grid(legend1,prow, legend2, rel_widths = c(.3,2, .5), ncol = 3, nrow = 1)
+
+# save_plot("one_two_update.pdf",prow2, base_width=16, base_height=5, dpi=300)
+# plot_grid(prow )
+# 
+# plot_grid(prow)
+# ggsave("one_two_update2.pdf",prow2, units="in", width=15, height=5, dpi=300)
+plot_grid(prow2)
+# dev.off()
+```
+
+```{r test_umap}
+
+##############t tests
+ab_test<-active_ko$orf_count
+qqnorm(ab_test);plot(density(ab_test));shapiro.test(ab_test)
+
+groupc<-ab_test[active_ko$group_dna%in%c("Cluster 5","Cluster 2","Cluster 1")]
+groupBa<-ab_test[!active_ko$group_dna%in%c("Cluster 5","Cluster 2","Cluster 1")]
+
+t.test(groupc,groupBa)
+sd(groupc);sd(groupBa)
+############test
+##############t tests
+ab_test<-active_ko$ko_count
+qqnorm(ab_test);plot(density(ab_test));shapiro.test(ab_test)
+
+groupc<-ab_test[active_ko$group_dna%in%c("Cluster 5","Cluster 2","Cluster 1")]
+groupBa<-ab_test[!active_ko$group_dna%in%c("Cluster 5","Cluster 2","Cluster 1")]
+
+t.test(groupc,groupBa)
+sd(groupc);sd(groupBa)
+############test
+##############t tests
+ab_test<-df_big$ratio_ko_orfs
+qqnorm(ab_test);plot(density(ab_test));shapiro.test(ab_test)
+
+groupc<-ab_test[active_ko$group_dna%in%c("Cluster 5","Cluster 2","Cluster 1")]
+groupBa<-ab_test[!active_ko$group_dna%in%c("Cluster 5","Cluster 2","Cluster 1")]
+
+t.test(groupc,groupBa)
+sd(groupc);sd(groupBa)
+############with tax  
+```
+
+```{r taxonomy_umap,fig.width=7}
+# plot UMAP with taxonomy (phylum)
+taxonomy_Final <-read.delim(paste(dir,"/gtdbtk.bac120.summary.tsv",sep = ""))
+
+taxonomy_Final$user_genome<-substr(x = taxonomy_Final$user_genome, 1,7)
+tax<-taxonomy_Final$classification
+tax_list<-lapply(tax, function(x) strsplit(as.character(x),";"))
+taxonomy <- matrix(unlist(tax_list), ncol = 7, byrow = TRUE)
+taxonomy<-cbind(taxonomy_Final[,1],taxonomy)
+taxonomy[,1]<-gsub("bin_","",taxonomy[,1])
+
+tax<-taxonomy[match(df_big$names,taxonomy[,1]),]
+
+df_big$phylum<-gsub("_.*","",substring(tax[,3],4))
+df_big$class<-substring(tax[,4],4)
+
+umap1<-ggplot(df_big,aes(x=V1,y=V2))+scale_shape_manual(values=c(19,1))+
+  geom_point(aes(color=phylum,shape=Best),size=3)+
+  guides(colour = guide_legend(override.aes = list(size=4)),shape = guide_legend(override.aes = list(size=4)))+ labs(shape="Transcribed KO ratio",x="UMAP1",y="UMAP2")+
+  geom_text_repel(size=4,parse  = TRUE,aes(label=names,color=phylum),point.padding = 0.1)+ theme(text = element_text(size=size_all),
+plot.title = element_text(size=size_all),
+axis.title.x = element_text(size=size_all),
+axis.title.y = element_text( size=size_all), 
+legend.title = element_text(size=size_all),
+legend.text=element_text(size=size_all))#t-test
+
+plot(umap1)
+
+
+```
+
+```{r print_umap_tax2, fig.width= 7}
+# plot UMAP with taxonomy (class)
+umap2<-ggplot(df_big,aes(x=V1,y=V2))+scale_shape_manual(values=c(19,1))+
+  geom_point(aes(color=class,shape=Best),size=3)+
+  guides(colour = guide_legend(override.aes = list(size=3)),shape = guide_legend(override.aes = list(size=3)))+ labs(shape="Transcribed KO ratio",x="UMAP1",y="UMAP2")+
+  geom_text_repel(size=4,parse  = TRUE,aes(label=names,color=class),point.padding = 0.1)+ theme(text = element_text(size=size_all),
+plot.title = element_text(size=size_all),
+axis.title.x = element_text(size=size_all),
+axis.title.y = element_text( size=size_all), 
+legend.title = element_text(size=size_all),
+legend.text=element_text(size=size_all))#t-test
+
+umap2
+```
+
+
+
+
+```{r table4}
+# Prepare taxonomy table
+
+names_ord<-sort(df_big$names)
+tax<-taxonomy[match(names_ord,gsub("bin_","",taxonomy[,1])),]
+TAX<-cbind(gsub("_.*","",substring(tax[,3],4)),gsub("_.*","",substring(tax[,4],4)),gsub("_.*","",substring(tax[,7],4)))
+
+map16s<-read.csv(paste(dir,"/table_mapped_OTU_bins_strict.csv",sep = ""))
+map16sf<-map16s[match(names_ord,gsub("bin_","",substr(x = map16s$bins, 1,7))),]
+map16sff<-map16sf[,c(3,4)]
+map16sff$subject.id[map16sff$subject.id==0]<-NA
+map16sff$X..identity[map16sff$X..identity==0]<-NA
+
+silva16s<-read.csv(paste(dir,"/table_mapped_silva_bins_strict.csv",sep = ""))
+silva_bin<-gsub("bin_","",substr(x = silva16s$bins, 1,7))
+silva16sf<-silva16s[match(names_ord,silva_bin),]
+
+
+silva16sff<-silva16sf$X..identity
+silva16sff[silva16sff==0]<-NA
+
+TAX_final<-cbind(TAX,map16sff,silva16sff,silva16sf$path)
+rownames(TAX_final)<-gsub("bin_","",tax[,1])
+colnames(TAX_final)<-c("")
+xtable(TAX_final)
+```
+
+```{r table5}
+# read data from succession experiment (include the corresponding path)
+table <- read.delim(".../anaerobic-benzene-degrading-culture/succession_experiment/Data/2_Environmentaldata_NoIn_1701.txt")
+table$SampleID<-gsub(".*_","",table$SampleID)
+table<-table[,-2]
+xtable(table,digits = 2)
+library(gdata)
+
+df <-read.xls (".../anaerobic-benzene-degrading-culture/succession_experiment/Data/1_CorrectionValues_rRNAperCell_taxonomy.xlsx", sheet = 1, header = TRUE)
+otus<-c("OTU624837510","OTU685366684","OTU91680185","OTU717462002")
+df_sel<-df[df[,1]%in%otus,]
+df_self<-df_sel[,-c(2,3)]
+mags<-c("001","003","005","006","009","018","020")
+
+tax_c<-apply(tax, 2, function(x) gsub("^.__","",x))
+tax_cf<-tax_c[tax_c[,1]%in%paste("bin_",mags,sep = ""),]
+tax_cf<-as.data.frame(tax_cf)
+colnames(tax_cf)<-colnames(df_self)
+ftax<-rbind(df_self,as.data.frame(tax_cf))
+xtable(ftax)
+
+```
+
+
+
+```{r diff_exp}
+# Expression of MAGs biofilm vs liquid
+
+library(limma)
+library(gplots)
+library(RColorBrewer)
+library(pheatmap)
+
+inp<-list.files(path = paste(dir,"/bins_bowtie_rna_mapped",sep = ""))
+inp_mod<-substr(x = inp, 1,7)
+
+
+orf_rna_tables<-list()
+orf_activitiy<-list()
+j<-1
+for (i in inp){ 
+  table_rna <- read.csv(paste(path,i,sep = "/"))
+  table<-as.matrix(table_rna[,3:7])
+  table1<-sweep(table, 2, as.numeric(rna_reads), "/")
+  table1<-table1*mean(as.numeric(rna_reads))
+  rownames(table1)<-as.character(table_rna[,1])
+  orf_rna_tables[[j]]<-table1
+  orf_activitiy[[j]]<-table
+  j<-j+1
+}
+names(orf_rna_tables)<-inp_mod
+
+total_rna_per_sp<-unlist(lapply(orf_activitiy, function(x) sum(rowSums(x))))
+
+
+# Normilize with total mRNA per MAG
+
+for (i in 1:length(orf_rna_tables)){
+
+  orf_rna_tables[[i]]<-( orf_rna_tables[[i]]/total_rna_per_sp[i])*mean(total_rna_per_sp)
+}
+
+
+sum_exp<-lapply(orf_rna_tables, colSums)
+diff_sum_exp <- matrix(unlist(sum_exp), ncol = 5, byrow = TRUE)
+rownames(diff_sum_exp)<-gsub("bin_","",inp_mod)
+colnames(diff_sum_exp)<-colnames(orf_activitiy[[1]])
+diff_sum_exp<-diff_sum_exp[as.logical(accepted),]
+
+
+logcounts<-log2(diff_sum_exp)
+
+
+logcounts_h<-logcounts
+logcounts_h[logcounts_h==-Inf]<-NA
+pheatmap(logcounts_h)
+
+group<-factor(c("Biofilm","Biofilm","Liquid","Liquid","Liquid"))
+design <- model.matrix(~ 0 + group)
+colnames(design) <- levels(group)
+
+
+fit <- lmFit(logcounts,design = design)
+names(fit)
+cont.matrix <- makeContrasts(test=Biofilm - Liquid,levels=design)
+fit.cont <- contrasts.fit(fit, cont.matrix)
+fit.cont <- eBayes(fit.cont)
+summa.fit <- decideTests(fit.cont)
+summary(summa.fit)
+topTable(fit.cont,sort.by="p",number=47)
+volcanoplot(fit.cont,highlight=45,names=rownames(fit.cont$coefficients))
+
+library(xtable)
+xtable(topTable(fit.cont,sort.by="p",number=47),digits=6)
+
+
+names<-rownames(fit.cont$coefficients)
+names<-make.unique(names)
+res_data<-data.frame(row.names = names)
+res_data$names<-as.vector(names)
+res_data$cf<-as.vector(fit.cont$coefficients )
+res_data$Pvalue<- as.vector(-log10(fit.cont$p.value))
+res_data$pvalue<- as.vector(fit.cont$p.value)
+
+
+colr<-rep("No Sig.",nrow(res_data))
+colr[which(res_data$cf > 1 & res_data$pvalue<0.05)]<-"Biofilm"
+colr[which(res_data$cf < -1 & res_data$pvalue<0.05)]<-"Liquid"
+res_data$col<-colr
+colr<-rep(0,nrow(res_data))
+colr[which(abs(res_data$cf )> 1 & res_data$pvalue<0.05)]<-1
+res_data$sig<-colr
+```
+
+```{r plot_diff, fig.width=7}
+library(ggrepel)
+colors_ratio<-c('#00ced1ff','#e41a1cff','#1b9e77')
+de<-ggplot(res_data,aes(x=cf, y=Pvalue,colour=col)) +scale_color_manual("Significant higher:",values=c('#00ced1ff','#e41a1cff','#1b9e77'))+
+  geom_point(aes(size=col)) +scale_size_manual(values=c(3,3,1))+
+  geom_text_repel(data=subset(res_data,sig==1),aes(label=names),parse  = TRUE,box.padding = 0.2)+
+  xlab("log2 fold change") + 
+  ylab("-log10 p-value") +
+  theme(text = element_text(size=15),
+          plot.title = element_text(size = rel(1.5), hjust = 0.5),
+          axis.title.x = element_text(size=15 ),
+          axis.title.y = element_text( size=15),legend.title = element_text(size=15),
+          legend.text = element_text(size=15))+guides(size = FALSE)+ guides(colour = guide_legend(override.aes = list(size=4)),shape = guide_legend(override.aes = list(size=4)))
+de
+# ggsave("DE.pdf", units="in", width=7, height=5, dpi=300)
+```
+
+```{r pathways}
+#read and arrange custom KEGG selections for anaerobic benzene degradation
+benzen_ko_rna<-read.csv( paste(dir,"/KO_tables_rna/benzene_rna_a_norm_BioLiq.csv",sep = ""))
+rownames(benzen_ko_rna)<-substr(x = rownames(benzen_ko_rna), 1,7)
+benzen_ko_rna<-benzen_ko_rna[-c(3,5,11),]
+setwd(paste(dir,"/custom_pathways",sep = ""))
+out<-paste(dir,"/custom_pathways",sep = "")
+
+library(igraph)
+
+cmds<-c()
+flist <- list.files(pattern = ".csv$")
+
+ko_meta<-c()
+ko_names<-c()
+for(j in flist){
+  print(j)
+  temp <- read.csv(paste(getwd(), j,sep = "/"), header=FALSE)
+  lis_temp<-apply(as.matrix(temp), MARGIN = 1, function(x) as.list(grep("^K",x,value = TRUE)))
+  lis_temp<-lapply(lis_temp, unlist)
+  is_reaction<-unlist(lapply(lis_temp, function(x) !all(is.na(x))))
+  ko_temp_m<-gsub(".csv","",j)
+  lis_R<-apply(as.matrix(temp), MARGIN = 1, function(x) grep("^R.*",x,value = TRUE))
+  if(is.list(lis_temp)){
+    names(lis_temp)<-lis_R
+    ko_names<-c(ko_names,unlist(lis_temp[is_reaction]))
+  }else{
+    ko_names<-c(ko_names,lis_temp)
+    names(ko_names)[match(lis_temp,ko_names)]<-make.unique(rep(lis_R,length(lis_temp)))
+  }
+  
+  ko_meta<-c(ko_meta,rep(ko_temp_m,length(unlist(lis_temp[is_reaction]))))
+  
+}
+reaction<-unlist(lapply(strsplit(names(ko_names),"[.]"), function(x)x[1]))
+ko_meta<-as.factor(ko_meta)
+
+custom_pathways<-list()
+benzen_ko_rna<-as.matrix(benzen_ko_rna)
+for(i in 1:length(levels(ko_meta))){
+  print(i)
+  temp<-ko_meta == levels(ko_meta)[i]
+  mat<-benzen_ko_rna[,sapply(ko_names[temp], function(x) match(x,colnames(benzen_ko_rna)))]
+  if(is.matrix(mat)==T){
+  }else{
+    mat<-as.matrix(mat)
+  }
+  colnames(mat)<-gsub("[.].*","",paste(ko_names[temp],names(ko_names[temp]),sep = "-"))
+  mat[is.na(mat)] <- 0
+  reaction_temp<-reaction[temp]
+  mat<-t(mat)
+  reactions<-as.factor(reaction_temp)
+  
+  side<-as.data.frame(reactions)
+  rownames(side)<-rownames(mat)
+  mat<-log2(mat)
+  mat[is.infinite(mat)]<-0
+  custom_pathways[[i]]<-mat
+
+  
+}
+names(custom_pathways)<-levels(ko_meta)
+```
+
+```{r construct_custom_pw_coords}
+# Arrange into a graph
+comp<-c("c_Benzene","c_Benzylsuccinate","c_Benzoate","c_Hydroxybenzene","c_Benzoyl-CoA","c_Acetyl/Succinyl-CoA","c_Hydroxipimelyl-CoA","c_Crotonyl-CoA","c_Acetyl-CoA-out","c_Glyoxylate_shunt-out","c_TCA-out","c_Acetate","c_Butyrate","c_Nitrate")
+mat_to_graph<-matrix(0,length(custom_pathways),length(comp))
+rownames(mat_to_graph)<-names(custom_pathways)
+colnames(mat_to_graph)<-comp
+i<-.5
+mat_to_graph[c(5,6,7),1]<-i
+mat_to_graph[c(5,8),2]<-i
+mat_to_graph[c(6,9),3]<-i
+mat_to_graph[c(7,10),4]<-i
+mat_to_graph[c(8,9,10,3,4),5]<-i
+mat_to_graph[c(3,17),6]<-i
+mat_to_graph[c(4,2),7]<-i
+mat_to_graph[c(13,14,16,2),8]<-i
+mat_to_graph[c(17,15,16),9]<-i
+mat_to_graph[c(15),10]<-i
+mat_to_graph[c(17),11]<-i
+mat_to_graph[c(13),12]<-i
+mat_to_graph[c(14),13]<-i
+mat_to_graph[c(1,11,12),14]<-i
+
+
+graph<-graph_from_incidence_matrix(mat_to_graph,weighted=T)
+
+V(graph)$shape <-ifelse(grepl("c_",names(V(graph))),"circle","square")
+V(graph)$size <-ifelse(grepl("c_",names(V(graph))),5,10)
+
+# graph_n <- set.vertex.attribute(graph, "name", value=gsub("c_","",names(V(graph))))
+# graph_f <- set.vertex.attribute(graph_n, "name", value=gsub("_"," ",get.vertex.attribute(graph_n,"name")))
+# graph_e <- set.vertex.attribute(graph_f, "name", value=gsub("Benzene mid","Mid",get.vertex.attribute(graph_f,"name")))
+
+
+plot(graph,vertex.label.dist=1.5)
+
+
+minC <- rep(-Inf, vcount(graph))
+maxC <- rep(Inf, vcount(graph))
+coords <-  layout_with_fr(graph)
+
+
+plot(graph, layout = coords,vertex.label.dist=1.2,vertex.label.degree = -1.2)
+```
+
+```{r construct_custom_pw_final}
+# incorporate mRNA into the graph and visualize them.
+col_bins<-c()
+col_bins_v<-c()
+for (i in 1:47){
+  t<-unlist(lapply(custom_pathways, function(x) mean(x[,i])))
+  
+  col_bins<-cbind(col_bins,t)
+  col_bins_v<-c(col_bins_v,t)
+}
+col_bins_v[is.na(col_bins_v)]<-0
+
+
+####
+palettec<-c('#ffffcc','#ffffcc','#ffeda0','#ffeda0','#fed976','#fed976','#feb24c','#feb24c','#fd8d3c','#fd8d3c','#fc4e2a','#e31a1c','#bd0026','#800026')
+maxColorValue <- 16
+palette <- colorRampPalette(rev(brewer.pal(n = 7, name = "Spectral")))(maxColorValue)
+palette<-palette[-c(1,2)]
+
+col_bins_vf<-palettec[cut(col_bins_v, maxColorValue-2)]
+col_bins_vf[which(col_bins_v==0)]<-"white"
+col_mat<-matrix(col_bins_vf,nrow=nrow(col_bins),ncol = ncol(col_bins))
+rownames(col_mat)<-rownames(col_bins)
+colnames(col_mat)<-colnames(custom_pathways[[1]])
+
+
+V(graph)$label.cex<-1
+graphlist<-list()
+for (i in 1:ncol(col_mat)){
+  V(graph)$color <- ifelse(grepl("c_",names(V(graph))),"#2c7fb8",col_mat[,i])
+
+  plot(graph, layout = coords,vertex.label.dist=1.2,vertex.label.degree = -1.5,main=gsub("bin_","MAG ",colnames(col_mat)[i]),edge.width=3,edge.curved=0.2,vertex.frame.width=13,
+      vertex.label.color=ifelse(grepl("c_",names(V(graph))),"#2c7fb8","black"),
+      vertex.label.font=2,margin=-.05)
+
+  graphlist[[i]]<-graph
+}
+
+color.bar <- function(lut, min, max=-min, nticks=11, ticks=seq(min, max, len=nticks), title='') {
+  scale = (length(lut)-1)/(max-min)
+  
+  plot(c(0,10), c(min,max), type='n', bty='n', xaxt='n', xlab='', yaxt='n', ylab='', main=title)
+  axis(2, ticks, las=1)
+  for (i in 1:(length(lut)-1)) {
+    y = (i-1)/scale + min
+    rect(0,y,10,y+1/scale, col=lut[i], border=NA)
+  }
+} 
+
+color.bar(c("white",palettec), 0,round(max(col_bins_v),digits = 1))
+
+
+```
+
+
+```{r code_classif}
+# Classification to diminate or non-dominate MAGs
+# arrange like before without taking log2
+custom_pathways2<-list()
+benzen_ko_rna<-as.matrix(benzen_ko_rna)
+for(i in 1:length(levels(ko_meta))){
+  print(i)
+  temp<-ko_meta == levels(ko_meta)[i]
+  mat<-benzen_ko_rna[,sapply(ko_names[temp], function(x) match(x,colnames(benzen_ko_rna)))]
+  if(is.matrix(mat)==T){
+  }else{
+    mat<-as.matrix(mat)
+  }
+  colnames(mat)<-gsub("[.].*","",paste(ko_names[temp],names(ko_names[temp]),sep = "-"))
+  mat[is.na(mat)] <- 0
+  reaction_temp<-reaction[temp]
+  mat<-t(mat)
+  reactions<-as.factor(reaction_temp)
+  
+  side<-as.data.frame(reactions)
+  rownames(side)<-rownames(mat)
+  custom_pathways2[[i]]<-mat
+}
+names(custom_pathways2)<-levels(ko_meta)
+
+temp_pws<-lapply(custom_pathways2, colSums)
+temp_length<-c()
+for (i in 1:length(temp_pws)){
+  temp_length<-rbind(temp_length,apply(custom_pathways2[[i]], MARGIN = 2, nnzero))
+}
+
+
+  
+temp_pws_mat<-matrix(unlist(temp_pws),ncol =length(temp_pws[[1]]),byrow = T )
+rownames(temp_pws_mat)<-names(temp_pws)
+colnames(temp_pws_mat)<-names(temp_pws[[1]])
+
+table_primary_check<-temp_pws_mat/temp_length
+table_primary_check[is.nan(table_primary_check)] <- 0
+temp_classes<-table_primary_check
+
+class_b_deg<-c()
+for (i in 1:ncol(temp_classes)){
+  if (all(temp_classes[5:10,i]==0)){
+    class_b_deg[i]<-1
+  }else if (sum(temp_classes[5:10,i])>0){
+    class_b_deg[i]<-2
+  }
+  if (temp_classes[5,i]&&temp_classes[8,i]>0 ||temp_classes[6,i]&temp_classes[9,i]>0||temp_classes[7,i]&temp_classes[10,i]>0){
+    class_b_deg[i]<-3
+  }
+  if ((temp_classes[5,i]&&temp_classes[8,i]>1 ||temp_classes[6,i]&temp_classes[9,i]>1||temp_classes[7,i]&temp_classes[10,i]>1)&&(temp_classes[2,i]&&temp_classes[4,i]>1 ||temp_classes[3,i]>1)){
+    class_b_deg[i]<-4
+    
+  }
+
+  
+}
+names(class_b_deg)<-colnames(temp_classes)
+
+
+
+```
+
+
+```{r code}
+#
+data_good<-data[which(data$accepted=="Good"),]
+mean_rna_log<-cbind(data_good$biofilm_rna_norm_log,data_good$liguid_rna_norm_log)
+mean_rna_log<-rowMeans(mean_rna_log)
+names(mean_rna_log)<-data_good$bins
+dominant<-ifelse(mean_rna_log>10,2,1) 
+
+table<-as.data.frame(dominant)
+table$expressed<-res_data$col
+
+benzen_ko1<-read_data(paste(dir,"/KO_tables/benzene_ko_binary.csv",sep = ""))
+rownames(benzen_ko1)<-substr(x = rownames(benzen_ko1), 1,7)
+benzen_ko1<-benzen_ko1[-c(3,5,11),]
+library(apcluster)
+apres3<-apclusterK(corSimMat(method = "pearson"),benzen_ko1,K=3)
+
+temp<-apres3@clusters
+names(temp)<-paste("Group",c("A", "C", "B"),sep = "_")
+final_clust<-unlist(lapply(strsplit(names(unlist(temp)),"[.]"), function(x) x[1]))
+names(final_clust)<-unlist(lapply(strsplit(names(unlist(temp)),"[.]"), function(x) x[2]))
+final_groups<-final_clust
+
+apres3<-apcluster(corSimMat(method = "pearson"),benzen_ko1,q=0.1)
+temp<-apres3@clusters
+names(temp)<-paste("Cluster",1:8,sep = "_")
+final_clust<-unlist(lapply(strsplit(names(unlist(temp)),"[.]"), function(x) x[1]))
+names(final_clust)<-unlist(lapply(strsplit(names(unlist(temp)),"[.]"), function(x) x[2]))
+
+table$group<-final_groups[match(rownames(table),gsub("bin_","",names(final_groups)))]
+table$cluster<-final_clust[match(rownames(table),gsub("bin_","",names(final_clust)))]
+
+
+gsub("bin_","",names(class_b_deg))
+table$benzene_degradation<-class_b_deg[match(rownames(table),gsub("bin_","",names(class_b_deg)))]
+
+table_ord_g<-table[order(table$group),]
+table_reorder<-c()
+for(i in unique( table_ord_g$group)){
+  temp<-table_ord_g[which(table_ord_g$group==i),]
+  temp_ord<-temp[order(temp$cluster),]
+  table_reorder<-rbind(table_reorder,temp_ord)
+}
+
+table_reorder$Bins<-rownames(table_reorder)
+
+
+test<-as.factor(table_reorder$group)
+levels(test)<-c(1,2,3)
+table_reorder$group<-test
+table_reorder$group<-as.integer(table_reorder$group)
+dom_table_reorder<-table_reorder[which(table_reorder$dominant==2),]
+nodom_table_reorder<-table_reorder[which(!table_reorder$dominant==2),]
+size_all<-15
+pos <- position_jitter(width = 0.2, height = 0.2, seed = 1)
+s1<-ggplot(dom_table_reorder, aes(x= group, y=benzene_degradation,color=expressed)) +
+  scale_colour_manual(values= colors_ratio,labels = c("Biofilm", "Liquid", "Biofilm/Liquid"))+
+  geom_point(position = pos, size=4)+
+  geom_text_repel(parse  = TRUE,size=5,position = pos,aes(label=Bins),point.padding = unit(0.25, "lines"),
+                  box.padding = unit(0.25, "lines"))+ 
+  scale_x_discrete(name ="Functional diversity",limits=c("Group A", "Group B", "Group C"))+
+  scale_y_discrete(name ="Potential primary consumer",limits=c("None","Low", "Medium", "High"))+ theme_linedraw()+
+  labs(color="Higher in:",title = "Dominant organisms")+
+  theme(text = element_text(size=size_all),
+          plot.title = element_text(size=size_all),
+          axis.title.x = element_text(size=size_all),
+          axis.title.y = element_text( size=size_all),legend.title = element_text(size=size_all),
+          legend.text = element_text(size=size_all))+ guides(colour = guide_legend(override.aes = list(size=4)),shape = guide_legend(override.aes = list(size=4)))
+
+
+  
+pos <- position_jitter(width = 0.2, height = 0.2, seed = 1)
+nodom_table_reorderf<-rbind(nodom_table_reorder,nodom_table_reorder[nrow(nodom_table_reorder),])
+nodom_table_reorderf[nrow(nodom_table_reorderf),5]<-4
+nodom_table_reorderf[nrow(nodom_table_reorderf),3]<-NaN
+
+s2<-ggplot(nodom_table_reorderf, aes(x= group, y=benzene_degradation,color=expressed)) +
+  scale_colour_manual(values= colors_ratio,labels = c("Biofilm", "Biofilm/Liquid"))+
+  geom_point(position = pos, size=4)+
+  geom_text_repel(parse  = TRUE, data=subset(nodom_table_reorderf, (benzene_degradation>2)),size=5,position = pos,aes(label=Bins),point.padding = unit(0.25, "lines"),
+                  box.padding = unit(0.25, "lines"))+ 
+  scale_x_discrete(name ="Functional diversity",limits=c("Group A", "Group B", "Group C"))+
+  scale_y_discrete(name ="",limits=c("None","Low", "Medium", "High"))+ theme_linedraw()+
+  labs(color="Higher in:",title = "Non-Dominant organisms")+
+  theme(text = element_text(size=size_all),
+        plot.title = element_text(size=size_all),
+        axis.title.x = element_text(size=size_all),
+        axis.title.y = element_text( size=size_all),legend.title = element_text(size=size_all),
+        legend.text = element_text(size=size_all))+ guides(colour = guide_legend(override.aes = list(size=4)),shape = guide_legend(override.aes = list(size=4)))
+  
+```
+
+```{r plot_simple_plot,fig.width=12.5}
+prow <- plot_grid(s1 + theme(legend.position="none"),
+                  s2 + theme(legend.position="none"), 
+                  labels=c("c", "d"), ncol = 2, nrow = 1, label_fontface = "bold",label_size=25)
+legend <- get_legend(s1)
+plot_grid(prow, legend, rel_widths = c(2, .5))
+
+# ggsave("the_simple_plot.pdf", plot_grid(prow, legend, rel_widths = c(2, .5)),units="in", width=12.5, height=5, dpi=300)
+plot_grid(prow, legend, rel_widths = c(2, .5))
+# dev.off()
+```
+
+
+
+```{r create_custom_pw}
+# Similary like before but visulization of idivitual heatmap per each custom KO selection for anaerobic benzene degradation.
+benzen_ko_rna<-read.csv( paste(dir,"/KO_tables_rna/benzene_rna_a_norm_BioLiq.csv",sep = ""))
+rownames(benzen_ko_rna)<-substr(x = rownames(benzen_ko_rna), 1,7)
+benzen_ko_rna<-benzen_ko_rna[-c(3,5,11),]
+
+# Slightly different selections by mergig some parts, from 17 which were used on the graphs above to 14 here.
+setwd(paste(dir,"/custom_pathways_01/",sep = ""))
+out<-paste(dir,"/custom_pathways_01/",sep = "")
+
+library(igraph)
+
+cmds<-c()
+flist <- list.files(pattern = ".csv$")
+  
+ko_meta<-c()
+ko_names<-c()
+for(j in flist){
+  print(j)
+  temp <- read.csv(paste(getwd(), j,sep = "/"), header=FALSE)
+  lis_temp<-apply(as.matrix(temp), MARGIN = 1, function(x) as.list(grep("^K",x,value = TRUE)))
+  lis_temp<-lapply(lis_temp, unlist)
+  is_reaction<-unlist(lapply(lis_temp, function(x) !all(is.na(x))))
+  ko_temp_m<-gsub(".csv","",j)
+  lis_R<-apply(as.matrix(temp), MARGIN = 1, function(x) grep("^R.*",x,value = TRUE))
+  if(is.list(lis_temp)){
+    names(lis_temp)<-lis_R
+    ko_names<-c(ko_names,unlist(lis_temp[is_reaction]))
+  }else{
+    ko_names<-c(ko_names,lis_temp)
+    names(ko_names)[match(lis_temp,ko_names)]<-make.unique(rep(lis_R,length(lis_temp)))
+  }
+  
+  ko_meta<-c(ko_meta,rep(ko_temp_m,length(unlist(lis_temp[is_reaction]))))
+  
+}
+reaction<-unlist(lapply(strsplit(names(ko_names),"[.]"), function(x)x[1]))
+ko_meta<-as.factor(ko_meta)
+library(apcluster)
+benzen_ko_all<-benzen_ko_rna
+benzen_ko_all_pot<-as.matrix(benzen_ko_rna)
+benzen_ko_all_pot[benzen_ko_all_pot>0]<-1
+ap_all<-apclusterK(corSimMat(method = "pearson"),benzen_ko_all_pot,K=3)
+clusters_pw<-c()
+for(i in 1:length(ap_all@clusters)){
+  t<-cbind(names(ap_all@clusters[[i]]),rep(i,length(ap_all@clusters[[i]])))
+  clusters_pw<-rbind(clusters_pw,t)
+}
+Clusters_all = data.frame(Clusters_all = factor(paste("c",clusters_pw[,2],sep = "")))
+rownames(Clusters_all)<-clusters_pw[,1]
+colnames(Clusters_all)<-"Clusters_all"
+levels(Clusters_all$Clusters_all)<-c("groupA","groupC","groupB")
+
+ann_colors = list(
+  Clusters_all = c(groupA = "#66c2a5", groupC = "#fc8d62", groupB = "#8da0cb")
+)
+
+cols<-c("white",'#fdd49e','#fdbb84','#fc8d59','#ef6548','#d7301f','#b30000','#7f0000')
+library(RColorBrewer)
+breaksList = seq(0, 16, by = 1)
+cols<-colorRampPalette(rev(brewer.pal(n = 7, name = "Spectral")))(length(breaksList))
+cols[1:2]<-c("white","black")
+
+
+benzen_ko_rna<-as.matrix(benzen_ko_rna)
+  
+for(i in 1:length(levels(ko_meta))){
+  print(i)
+  temp<-ko_meta == levels(ko_meta)[i]
+  mat<-benzen_ko_rna[,sapply(ko_names[temp], function(x) match(x,colnames(benzen_ko_rna)))]
+  colnames(mat)<-gsub("[.].*","",paste(ko_names[temp],names(ko_names[temp]),sep = "-"))
+  mat[is.na(mat)] <- 0
+  reaction_temp<-reaction[temp]
+  mat<-t(mat)
+  reactions<-as.factor(reaction_temp)
+  
+  side<-as.data.frame(reactions)
+  rownames(side)<-rownames(mat)
+  mat<-log2(mat)
+  mat[is.infinite(mat)]<- -1
+  
+  pheatmap(mat, annotation_colors = ann_colors,annotation_col = Clusters_all, annotation_row = side,
+           cluster_rows=F,color=cols,main =levels(ko_meta)[i],
+           gaps_row=cumsum(rle(as.character(side[,1]))[[1]]),breaks = c(-1.5,-0.1,0,seq(max(mat))))
+}
+```

@@ -1,0 +1,725 @@
+---
+title: "Analyis of Benzene degradation batches"
+author: "Douwe Molenaar"
+date: "December 2017, update December 2019, update on May 2020 by Chrats Melkonian"
+output: html_document
+---
+
+```{r setup, include=FALSE, cache=FALSE}
+libs <- c('tidyverse', 'kableExtra', 'readxl', 'readr', 'party', 'knitr', 'cowplot')
+invisible(lapply(libs, library, character.only = TRUE))
+
+# ggplot theme
+theme_set(theme_bw())
+
+# global chunk options
+opts_chunk$set(
+  fig.path='_Figures/fig-', cache.path='_Knitr/cache/fig-', 
+  fig.width=5, fig.height=5, fig.align='center', 
+  dev=c('png','pdf'), dpi=300,
+  cache=TRUE,
+  warning=FALSE, message=FALSE, error=FALSE,
+  echo=FALSE)
+# read_chunk('Scripts/analysis.R')
+```
+
+
+```{r initialize}
+library(ggplot2)
+library(cowplot)
+library(randomForest)
+library(readxl)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(party) # provides random forest and ctree algorithms
+
+# data locations, include the path to the Data folder of succession experiment
+datadir <- '...' 
+concentrations_file <- '2_Environmentaldata_NoIn_1701.txt'
+OTUabundance_file <- '3_otu_table_Normalized_all.xls'
+OTUtaxonomy_file <- '1_CorrectionValues_rRNAperCell_taxonomy.xlsx'
+```
+
+```{r loadingdata}
+# loading data: concentrations of compounds
+concentrations <- read_tsv(file.path(datadir,concentrations_file)) %>%
+  separate(SampleID, c('nr', 'sample')) %>%
+  select(-nr)
+
+rownames(concentrations) <- concentrations$sample
+
+# OTU abundances
+otucounts <- read_excel(file.path(datadir,OTUabundance_file), sheet='Bef_Norm') %>%
+  rename(OTU = "Ids") %>%
+  gather(key='sample', value='count', -OTU) %>%
+  filter(OTU != 'total')
+
+# Cells per ml
+cell_conc <- read_excel(file.path(datadir,OTUabundance_file), sheet='Log10_cell_mL', range='A1:CJ2') %>%
+  select(-Ids) %>%
+  gather(key='num_sample', value='cells') %>%
+  separate(num_sample, c('nr','sample'), sep='_') %>%
+  select(-nr) %>%
+  mutate(total_cells = 10^cells)
+
+# OTU taxonomy and 16S copy number
+otutax <- read_excel(file.path(datadir,OTUtaxonomy_file))
+
+# Validation
+validated <- all(unique(otucounts$sample) %in% cell_conc$sample) && all(cell_conc$sample %in% otucounts$sample) && all(unique(otucounts$OTU) %in% otutax$OTU) && all(otutax$OTU %in% otucounts$OTU) & all(cell_conc$sample %in% concentrations$sample) & all(concentrations$sample %in% cell_conc$sample)
+
+
+# OTU cell concentrations
+otu_cells <- otucounts %>% 
+  inner_join(otutax %>% select(OTU, `Estimated 16S copy number per cell`)) %>%
+  mutate(corrected_count = count/`Estimated 16S copy number per cell`)
+totals <- otu_cells %>%
+  group_by(sample) %>%
+  summarise(total_corrected_count = sum(corrected_count))
+otu_cells <- otu_cells %>% 
+  inner_join(totals) %>%
+  mutate(corrected_fractional_count = corrected_count/total_corrected_count) %>%
+  inner_join(cell_conc) %>%
+  mutate(cells = corrected_fractional_count * total_cells) %>%
+  select(-c(corrected_count, total_corrected_count))
+
+# Diversity measures on samples
+shannon <- function(p) {
+  p1 <- p[p!=0]
+  return(-sum(p1*log(p1)))
+}
+
+shannon.di <- otu_cells %>% 
+  group_by(sample) %>% 
+  summarise(shannon.div = shannon(corrected_fractional_count))
+
+# shan.di <- apply(otuabund[-1],2,shannon)
+concentrations <- concentrations %>%
+  inner_join(shannon.di)
+
+```
+
+```{r zeroDays}
+# tabulate measured concentrations at day 0
+zerodays = concentrations[concentrations$Days==0,-c(1,2,3)]
+zerodaysn = dim(zerodays)[1]
+d <- data.frame(
+  mean=sapply(zerodays, mean),
+  stdev=sapply(zerodays, sd))
+```
+
+# Development of concentrations
+
+```{r}
+kable(d, digits=3) %>% kable_styling(full_width = FALSE)
+```
+
+## Decreasing nitrate concentrations: three clusters of cultures
+
+
+```{r sampleclasses}
+sampleclass <- rep('Stage 3', dim(concentrations)[1])
+sampleclass[concentrations$Nitrate_mM > l2[1] + l2[2]*concentrations$Days] <- 'Stage 2'
+sampleclass[concentrations$Nitrate_mM > l1[1] + l1[2]*concentrations$Days] <- 'Stage 1'
+concentrations$sampleclass <- factor(sampleclass, ordered=TRUE, levels=c('Stage 1','Stage 2','Stage 3'))
+
+```
+
+
+```{r nitratedev, fig.width=7}
+# confidence interval for day 0 nitrate. Based on t-distribution
+NO3confint=d['Nitrate_mM','mean'] + qt(c(0.025,0.975),df=zerodaysn-1)*d['Nitrate_mM','stdev']/sqrt(zerodaysn)
+# confidence interval for day 0 benzene. Based on t-distribution
+Benzconfint=d['Benzene_mM','mean'] + qt(c(0.025,0.975),df=zerodaysn-1)*d['Benzene_mM','stdev']/sqrt(zerodaysn)
+# plot nitrate concentrations over time
+# there are three types of cultures with boundary lines
+# slow, medium, fast
+l1 <- c(7.7,-0.019)
+l2 <- c(7.35,-0.019)
+p <- ggplot(concentrations, aes(x=Days, y=Nitrate_mM, colour=Benzene_mM,shape=sampleclass)) +
+  geom_abline(intercept = l1[1], slope=l1[2], colour='grey', linetype='dashed') +
+  geom_abline(intercept = l2[1], slope=l2[2], colour='grey', linetype='dashed') +
+  geom_point(size=3) +
+  labs(x='Time (Days)', y='[Nitrate] (mM)', colour='[Benzene] (mM)') + 
+  scale_colour_gradient(low='blue',high='red')
+print(p)
+```
+
+
+## Nitrite concentrations increase
+
+
+```{r nitritedev, fig.width=7}
+# plot nitrite concentrations over time
+# JITTERED!!
+p <- ggplot(concentrations, aes(x=Days, y=Nitrite_mM, colour=Benzene_mM, shape=sampleclass)) +
+  geom_jitter(size=3, width=0.5, height=0) +
+  labs(x='Time (Days)', y='[Nitrite] (mM)', colour='[Benzene] (mM)', shape='Culture stage ') + 
+  scale_colour_gradient(low='blue',high='red')
+print(p)
+```
+
+## Correlation of Benzene, Nitrite and Nitrate concentrations
+
+```{r nitrxBenzene, fig.width=10}
+# plot correlation of benzene with nitrate and nitrite 
+p1 <- ggplot(concentrations, aes(x=Nitrate_mM, y=Benzene_mM, shape=sampleclass)) +
+  geom_point(size=3) +
+  labs(x='[Nitrate] (mM)', y='[Benzene] (mM)', shape='Culture stage')
+p2 <- ggplot(concentrations, aes(x=Nitrite_mM, y=Benzene_mM, shape=sampleclass)) +
+  geom_point(size=3) +
+  labs(x='[Nitrite] (mM)', y='[Benzene] (mM)', shape='Culture stage')
+legend <- get_legend(p1)
+prow <- plot_grid(p1 + theme(legend.position="none"),
+                  p2 + theme(legend.position="none"), 
+                  labels=c("A", "B"), ncol = 2, nrow = 1)
+plot_grid(prow, legend, rel_widths = c(2, .5))
+```
+
+
+
+```{r nitrateNitrite, fig.width=7}
+# plot correlation of nitrite and nitrate
+# only takes place when nitrate is lower than 7 mM, Nitrate higher than 0.4/0.5 mM
+p <- ggplot(concentrations, aes(x=Nitrite_mM, y=Nitrate_mM, colour=Benzene_mM, shape=sampleclass)) +
+  geom_hline(yintercept = d['Nitrate_mM','mean'], colour='grey', linetype='dashed') +
+  geom_point(size=3) +
+  labs(x='[Nitrite] (mM)', y='[Nitrate] (mM)', colour='Benzene (mM)', shape='Culture stage ') + 
+  scale_colour_gradient(low='blue',high='red')
+plot(p)
+```
+
+
+
+## Total free nitrogen decreases
+
+```{r nitrxSum, fig.width=7}
+# the development of the stoichiometric sum
+p <- ggplot(concentrations, aes(x=Days, y=Nitrate_mM + Nitrite_mM, colour=Benzene_mM, shape=sampleclass)) +
+  geom_point(size=3) +
+  labs(x='Time (days)', y='[Nitrate] + [Nitrite] (mM)', colour='Benzene (mM)', shape='Culture stage') + 
+  scale_colour_gradient(low='blue',high='red')
+print(p)
+```
+
+
+## No clear correlation with culture density
+
+```{r sampleclassOD, fig.width=7}
+# No simple relation between OD and Culture cluster  or benzene
+p <- ggplot(concentrations, aes(x=Days, y=Log10_Cells_permL, colour=Benzene_mM, shape=sampleclass)) +
+  geom_jitter(size=3, height=0, width=0.4) +
+  labs(x='Time (Days)', y='Log10(cells)', colour='Benzene (mM)', shape='Culture stage ') + 
+  scale_colour_gradient(low='blue',high='red')
+plot(p)
+```
+## Consuption of all carbon sources over time
+
+```{r carbon, fig.width=10, fig.height=10}
+# main figure
+library(reshape2)
+sel<-data.frame(concentrations$Nicotinic_acid_pM,concentrations$Pantothenic_acid_pM,concentrations$p_Aminobenzoic_acid_pM, concentrations$Vitamin_B12_pM,concentrations$Biotin_pM, concentrations$Benzene_mM*1000)
+sel_data<-melt(sel)
+sel_data$Nitrite_mM<-rep(concentrations$Nitrite_mM,6)
+sel_data$Carbon_source<-c(rep("Acids",3*length(concentrations$Nicotinic_acid_pM)),rep("Vitamins",2*length(concentrations$Nicotinic_acid_pM)),rep("Benzene",1*length(concentrations$Nicotinic_acid_pM)))
+
+library(mgcv)
+library(patchwork)
+library(scales)
+
+expm1_trans <-  function() trans_new("expm1", "expm1", "log1p")
+size_all<-15
+pc <- ggplot(sel_data, aes(x=Nitrite_mM, y=value,colour=Carbon_source)) +scale_color_manual(values=c('#fc8d62','#8da0cb','#66c2a5'))+
+  scale_y_continuous(sec.axis = sec_axis(trans=~.*1,  labels = NULL, name=expression(paste("Benzene (", mu, "M)"))))+
+  stat_smooth(method = "gam", formula = y ~ s(x), size = 1.5,se =F)+
+  labs(x='Nitrite (mM)', y='Acids + Vitamins (pM)', colour='Carbon source') + theme(text = element_text(size=size_all),plot.title = element_text(size=size_all),
+axis.title.x = element_text(size=size_all),
+axis.title.y = element_text( size=size_all), 
+legend.title = element_text(size=size_all),
+legend.text = element_text(size=size_all)) 
+print(pc)
+```
+## Consuption of all carbon sources over time in detail
+```{r all_carbon}
+#Carbon sources of microbial communities supplementary
+library(viridis)
+sc1<-ggplot(concentrations, aes(x=Nitrite_mM, y=Benzene_mM, colour=Days, shape=sampleclass)) +scale_colour_viridis()+
+  geom_point(size=3) +
+  labs(x='Nitrite (mM)', y='Benzene (mM)', colour='Days', shape='Culture stage ')
+sc2<-ggplot(concentrations, aes(x=Nitrite_mM, y=Vitamin_B12_pM, colour=Days, shape=sampleclass)) +scale_colour_viridis()+
+  geom_point(size=3) +
+  labs(x='Nitrite (mM)', y='Vitamin B12 (pM)', colour='Days', shape='Culture stage ') 
+sc3<-ggplot(concentrations, aes(x=Nitrite_mM, y=Biotin_pM, colour=Days, shape=sampleclass)) +scale_colour_viridis()+
+  geom_point(size=3) +
+  labs(x='Nitrite (mM)', y='Biotin (pM)', colour='Days', shape='Culture stage ') 
+sc4<-ggplot(concentrations, aes(x=Nitrite_mM, y=Nicotinic_acid_pM, colour=Days, shape=sampleclass)) +scale_colour_viridis()+
+  geom_point(size=3) +
+  labs(x='Nitrite (mM)', y='Nicotinic acid (pM)', colour='Days', shape='Culture stage ') 
+sc5<-ggplot(concentrations, aes(x=Nitrite_mM, y=Pantothenic_acid_pM, colour=Days, shape=sampleclass)) +scale_colour_viridis()+
+  geom_point(size=3) +
+  labs(x='Nitrite (mM)', y='Pantothenic acid (pM)', colour='Days', shape='Culture stage ') 
+sc6<-ggplot(concentrations, aes(x=Nitrite_mM, y=p_Aminobenzoic_acid_pM, colour=Days, shape=sampleclass)) +scale_colour_viridis()+
+  geom_point(size=3) +
+  labs(x='Nitrite (mM)', y='p Aminobenzoic acid (mM)', colour='Days', shape='Culture stage ') 
+
+legend_sc <- get_legend(sc1)
+prow <- plot_grid(sc4 + theme(legend.position="none"),
+                  sc5 + theme(legend.position="none"),
+                  sc6 + theme(legend.position="none"),
+                  sc2 + theme(legend.position="none"), 
+                  sc3 + theme(legend.position="none"), 
+                  sc1 + theme(legend.position="none"),
+                  labels=c("a", "b","c","d","e","f"), ncol = 2, nrow = 3, label_fontface = "bold",label_size=25,rel_widths = c(2,2),align = "v")
+prowf<-plot_grid(prow,legend_sc,ncol = 2, nrow = 1,rel_widths = c(2,.5),rel_heights = c(1,5))
+print(prowf)
+# ggsave("/home/chrats/Desktop/bioreactor/all_carbon.pdf",prowf, units="in", width=14, height=15, dpi=300)
+```
+
+## Nitrite production over time
+
+```{r nitrite_rate, fig.width=10, fig.height=10}
+ng<-ggplot(concentrations, aes(x=Days, y=Nitrite_mM, colour=Benzene_mM, shape=sampleclass)) +scale_colour_gradient(low='#8da0cb',high='#fc8d62')+
+  geom_jitter(size=3, height=0, width=0.2) + geom_smooth(method = "lm", alpha = .1, size = .6,color="black",formula = y ~ poly(x, 2))+
+  labs(x='Time (days)', y='Nitrite (mM)', colour='Benzene (mM)', shape='Culture stage ')
+print(ng)
+# second order (quadratic) polynomial.
+# ggsave("/home/chrats/Desktop/bioreactor/nitrite_rates.pdf",ng, units="in", width=14, height=5, dpi=300)
+```
+
+## main figure 3 of the manuscript (metabolomics)
+```{r all, fig.width=10, fig.height=10}
+
+data_suc<-concentrations
+size_all<-15
+data_suc$total_cells<-cell_conc$total_cells
+
+p1 <- ggplot(concentrations, aes(x=Days, y=Nitrate_mM, colour=Benzene_mM,shape=sampleclass)) +
+  geom_abline(intercept = l1[1], slope=l1[2], colour='grey', linetype='dashed') +
+  geom_abline(intercept = l2[1], slope=l2[2], colour='grey', linetype='dashed') +
+  geom_point(size=4) +
+  labs(x='Time (Days)', y='Nitrate (mM)', colour='Benzene (mM)') + 
+  scale_colour_gradient(low='#8da0cb',high='#fc8d62')+ theme(text = element_text(size=size_all),plot.title = element_text(size=size_all),
+                                                                                                    axis.title.x = element_text(size=size_all),
+                                                                                                    axis.title.y = element_text( size=size_all), 
+                                                                                                    legend.title = element_text(size=size_all),
+                                                                                                    legend.text = element_text(size=size_all))
+library(scales)
+
+p2 <- ggplot(data_suc, aes(x=Days, y=total_cells, colour=Benzene_mM, shape=sampleclass)) +
+  geom_jitter(size=4, height=0, width=0.4) +
+  labs(x='Time (Days)', y='cells per mL', colour='Benzene (mM)', shape='Culture stage ') + 
+  scale_colour_gradient(low='#8da0cb',high='#fc8d62')+ scale_y_log10() + theme(text = element_text(size=size_all),plot.title = element_text(size=size_all),
+                                                                                                    axis.title.x = element_text(size=size_all),
+                                                                                                     axis.title.y = element_text( size=size_all), 
+                                                                                                    legend.title = element_text(size=size_all),
+                                                                                                    legend.text = element_text(size=size_all))
+                                                                   
+p3 <- ggplot(concentrations, aes(x=Nitrite_mM, y=Nitrate_mM, colour=Benzene_mM, shape=sampleclass)) +
+  annotate('segment', x = min(concentrations$Nitrite_mM), xend = max(concentrations$Nitrite_mM), y = 8, yend = 7.1, colour='grey', lwd=1) +
+  geom_hline(yintercept = d['Nitrate_mM','mean'], colour='grey', linetype='dashed') +
+  geom_point(size=4) +
+  labs(x='Nitrite (mM)', y='Nitrate (mM)', colour='Benzene (mM)', shape='Culture stage ') + 
+  scale_colour_gradient(low='#8da0cb',high='#fc8d62')+ theme(text = element_text(size=size_all),plot.title = element_text(size=size_all),
+                                                                                                    axis.title.x = element_text(size=size_all),
+                                                                                                    axis.title.y = element_text( size=size_all), 
+                                                                                                    legend.title = element_text(size=size_all),
+                                                                                                    legend.text = element_text(size=size_all))
+
+legend1 <- get_legend(p3)
+legend2 <- get_legend(pc)
+prow_leg <-  plot_grid(legend1,legend2,ncol = 1, nrow = 2)
+prow <- plot_grid(p1 + theme(legend.position="none"),
+                  p3 + theme(legend.position="none"), 
+                  p2 + theme(legend.position="none"), 
+                  pc + theme(legend.position="none"),
+                  labels=c("a", "b","c","d"), ncol = 2, nrow = 2, label_fontface = "bold",label_size=25,rel_widths = c(2,2),align = "v")
+prowf<-plot_grid(prow,prow_leg,ncol = 2, nrow = 1,label_size=25,rel_widths = c(2,.5))
+print(prowf)
+# ggsave("/home/chrats/Desktop/bioreactor/succesion_exp_F_v2.pdf",prowf, units="in", width=14, height=10, dpi=300)
+
+
+
+```
+## 3d plot 
+```{r plot_3d, fig.width=10}
+library(plotly)
+threed_succesion<-plot_ly(concentrations, x = ~Nitrate_mM, y = ~Nitrite_mM, z = ~Benzene_mM,  textposition = 'middle right', color = ~ Days, 
+        textfont = list(color = '#000000', size = 10),marker = list(size = 5,line = list(color = 'rgba(26,26,26, 1)',width = 2))) %>%
+  add_markers() %>%
+  layout(scene = list(xaxis = list(title = '[Nitrate] (mM)'),
+                      yaxis = list(title = '[Nitrite] (mM)'),
+                      zaxis = list(title = 'Benzene (mM)')))
+# htmlwidgets::saveWidget(threed_succesion, "/home/chrats/Desktop/bioreactor/benzene_nitrite_nitrate_time.html")
+```
+
+
+## Correlation overview
+
+```{r plotmatrix, fig.width=10, fig.height=10}
+# plot all variables against eachother
+noplotvars <- c('sample', 'Sample_Type', 'sampleclass') 
+plot(concentrations[!(names(concentrations) %in% noplotvars)], pch=20, cex=1)
+```
+
+## plot correlation of vitamin B12, biotin and nitrite 
+
+```{r vitB12BiotinNitrx, fig.width=10}
+
+p1 <- ggplot(concentrations, aes(x=Nitrite_mM, y=Vitamin_B12_pM, colour=Benzene_mM, shape=sampleclass)) +
+  geom_jitter(size=3, height=0, width=0.2) +
+  scale_colour_gradient(low='blue',high='red') +
+  labs(x='[Nitrite] (mM)', y='[Vitamin B12] (pM)', colour='Sampleclass', shape='Culture stage ')
+p2 <- ggplot(concentrations, aes(x=Nitrite_mM, y=Biotin_pM, colour=Benzene_mM, shape=sampleclass)) +
+  geom_jitter(size=3, height=0, width=0.2) +
+  scale_colour_gradient(low='blue',high='red') +
+  labs(x='[Nitrite] (mM)', y='[Biotin] (pM)', colour='Benzene (mM)', shape='Culture stage ')
+legend <- get_legend(p1)
+prow <- plot_grid(p1 + theme(legend.position="none"),
+                  p2 + theme(legend.position="none"), 
+                  labels=c("A", "B"), ncol = 2, nrow = 1)
+plot_grid(prow, legend, rel_widths = c(2, .5))
+```
+
+
+```{r vitB12BiotinNitrxBP, fig.width=10}
+# boxplots of the same correlations
+p1 <- ggplot(concentrations, aes(x=sampleclass, y=Vitamin_B12_pM, colour=Benzene_mM)) +
+  geom_boxplot(outlier.shape=NA, fill='grey90') +
+  geom_jitter(size=3, width=0.2, height=0) +
+  scale_colour_gradient(low='blue',high='red') +
+  labs(x='Culture cluster', y='[Vitamin B12] (pM)', colour='Benzene (mM)')
+p2 <- ggplot(concentrations, aes(x=sampleclass, y=Biotin_pM, colour=Benzene_mM)) +
+  geom_boxplot(outlier.shape=NA, fill='grey90') +
+  geom_jitter(size=3, width=0.2, height=0) +
+  scale_colour_gradient(low='blue',high='red') +
+  labs(x='Culture cluster', y='[Biotin] (pM)', colour='Benzene (mM)')
+legend <- get_legend(p1)
+prow <- plot_grid(p1 + theme(legend.position="none"),
+                  p2 + theme(legend.position="none"), 
+                  labels=c("A", "B"), ncol = 2, nrow = 1)
+plot_grid(prow, legend, rel_widths = c(2, .5))
+```
+
+## Culture diversity
+
+
+```{r shannondivTime, fig.width=8, fig.height=3}
+p <- ggplot(concentrations, aes(x=Days, y=shannon.div)) + geom_point(size=2) + stat_smooth(method='lm', formula=y ~ poly(x, 1), se=FALSE) + facet_grid(.~sampleclass) + labs(y='Shannon diversity', x='Time(days)')
+print(p)
+```
+
+ 
+```{r shannondivVitB12, fig.width=8, fig.height=3}
+p <- ggplot(concentrations, aes(x=Vitamin_B12_pM, y=shannon.div)) +
+  geom_point(size=2) + facet_grid(.~sampleclass) + 
+  labs(y='Shannon diversity', x='[Vitamin B12] (pM)')
+print(p)
+```
+
+# Correlations between OTU abundances and concentrations or sample cluster
+```{r definemixins}
+set.seed(6635452)
+# wide format otu_cells
+otu_cells_wide <- otu_cells %>%
+  select(OTU, sample, cells) %>%
+  spread(OTU, cells)
+
+# the variables to be mixed in the predictor together with OTU abundances
+mixins <- c('Days')
+allimpOTUs <- c()
+# define a general function to construct random forests for a concentration variable
+rfpredict <- function(varname, concentrations, otu_cells_wide, mixins=NA, controls=cforest_unbiased(ntree=1000)) {
+  vartable <- concentrations %>%
+    select_at(c('sample', mixins, varname)) %>%
+    inner_join(otu_cells_wide) %>%
+    select(-sample) %>%
+    rename_('targetvar'=varname)
+  
+  forest <- cforest(targetvar~., data=vartable, controls=controls)
+  
+  vartable <- vartable %>%
+    rename_(varname='targetvar')
+  vartable$prediction <- predict(forest)
+  return(list('rf'=forest, 'data'=vartable))
+}
+
+varImpPlot <- function(rf, n=20) {
+  imp <- varimp(rf)
+  impo <- order(imp, decreasing=TRUE)
+  op <- par(mar = c(5, 8, 4, 2) + 0.1)
+  barplot(sort(imp[impo[1:n]]),horiz=TRUE, las=1, cex.names=1, xlab='Variable importance')
+  par(op)
+}
+
+confusion <- function(f,rf) {
+  table(f, predict(rf, OOB=TRUE))
+}
+```
+
+
+## Predicting culture cluster
+
+```{r predictSampleclass}
+variable <- 'sampleclass'
+rfclass <- rfpredict(variable, concentrations, otu_cells_wide=otu_cells_wide, mixin=mixins, controls=cforest_unbiased(ntree=1000, mtry=10))
+# show confusion matrix
+conftable <- confusion(concentrations[[variable]], rfclass$rf)
+
+knitr::kable(as.matrix(conftable)) %>% kable_styling(full_width = FALSE)
+```
+
+
+```{r accurancy}
+cm<-conftable
+n = sum(cm) # number of instances
+nc = nrow(cm) # number of classes
+diag = diag(cm) # number of correctly classified instances per class 
+rowsums = apply(cm, 1, sum) # number of instances per class
+colsums = apply(cm, 2, sum) # number of predictions per class
+p = rowsums / n # distribution of instances over the actual classes
+q = colsums / n # distribution of instances over the predicted classes
+accuracy <- sum(diag) / n 
+accuracy
+precision = diag / colsums 
+recall = diag / rowsums 
+f1 = 2 * precision * recall / (precision + recall) 
+
+knitr::kable(data.frame(precision, recall, f1))
+```
+## Main figure 4 community composition and importance OTUs plot
+
+```{r BenzeneOTU,fig.width=11}
+
+vartable <- otu_cells %>% 
+  filter(OTU %in% c('OTU624837510','OTU91680185','OTU685366684','OTU717462002')) %>%
+  select(sample, cells, OTU) %>%
+  inner_join(concentrations)
+vartable$OTU<-factor(vartable$OTU,levels =c('OTU624837510','OTU91680185','OTU685366684','OTU717462002'))
+p <- ggplot(vartable, aes(x=sampleclass, y=cells)) +geom_boxplot(outlier.shape = NA)+
+  geom_point(position = "jitter",size=2) +
+  facet_wrap(.~OTU, scales='free')+labs(x="culture stage",y="cells per mL")+ scale_y_continuous(trans = 'sqrt')+  theme(text = element_text(size=size_all),
+        plot.title = element_text(size=size_all),
+        axis.title.x = element_text(size=size_all),
+        axis.title.y = element_text( size=size_all), 
+        legend.title = element_text(size=size_all),
+        legend.text = element_text(size=size_all))
+
+
+
+data_norm<-apply(as.matrix(otu_cells_wide[,-1]), 1, function(x) x/sum(x)) #relative cell abundacne 
+library(vegan)
+library(uwot)
+  temp_data<-vegdist(t(data_norm),method="bray") 
+embedding<-umap(as.matrix(t(temp_data)),n_epochs=1000,n_neighbors = 30)
+data_community<-as.data.frame(embedding)
+concentrations_reord<-concentrations[match(otu_cells_wide$sample, concentrations$sample),]
+data_community$sampleclass<-concentrations_reord$sampleclass
+data_community$color<-concentrations_reord$Benzene_mM
+data_community$days<-concentrations_reord$Days
+g<-ggplot(data_community, aes(x=V1,y=V2,shape=sampleclass,color=days))+geom_point(size=4)+scale_colour_gradient(low='#8da0cb',high='#fc8d62')+
+  theme(text = element_text(size=size_all),
+        plot.title = element_text(size=size_all),
+        axis.title.x = element_text(size=size_all),
+        axis.title.y = element_text( size=size_all), 
+        legend.title = element_text(size=size_all),
+        legend.text = element_text(size=size_all)) + labs(color="Benzene (mM)",x="UMAP1",y="UMAP2",shape="Culture stage")
+library(viridis)
+
+g2<-ggplot(data_community, aes(x=V1,y=V2))+geom_point(size=4,aes(color=days,shape=sampleclass))+ scale_colour_viridis()+#scale_colour_gradient(low='#1f77b4',high= '#bcbd22')+
+  theme(text = element_text(size=size_all),
+        plot.title = element_text(size=size_all),
+        axis.title.x = element_text(size=size_all),
+        axis.title.y = element_text( size=size_all), 
+        legend.title = element_text(size=size_all),
+        legend.text = element_text(size=size_all)) + labs(color="Days",x="UMAP1",y="UMAP2",shape="Culture stage")
+
+
+
+consumers<-c("Peptococcaceae")
+
+otu_primer<-otutax[otutax$Family%in%consumers,1]
+otu_primer
+
+colnames(otu_cells_wide)%in%otu_primer$OTU
+cells_primary<-rowSums(otu_cells_wide[,colnames(otu_cells_wide)%in%otu_primer$OTU])
+rest<-otu_cells_wide[,!colnames(otu_cells_wide)%in%otu_primer$OTU]
+cells_second<-rowSums(rest[,-1])
+
+data_dist<-data.frame(as.numeric(cells_primary))
+data_dist$cells_second<-as.numeric(cells_second)
+data_dist$samples<-otu_cells_wide$sample
+data_dist$sampleClass<-concentrations_reord$sampleclass 
+data_dist$days<-concentrations_reord$Days 
+data_dist$ratio<-data_dist[,1]/data_dist[,2]
+data_dist$dummy <- NA
+
+pep<-ggplot(data_dist, aes(x=sampleClass, y=ratio)) +geom_boxplot(outlier.shape = NA)+
+  geom_point(position = "jitter",size=3) +labs(x="culture stage",y="ratio cells per mL")+ 
+  scale_y_continuous(trans = 'sqrt')+  theme(text = element_text(size=size_all),
+plot.title = element_text(size=size_all),
+axis.title.x = element_text(size=size_all),
+axis.title.y = element_text( size=size_all), 
+legend.title = element_text(size=size_all),
+legend.text = element_text(size=size_all))+facet_wrap(.~dummy, labeller=label_bquote("Peptococcaceae OTUs / Community"))
+
+
+
+legendg2 <- get_legend(g2)
+prow <- plot_grid(
+                  p , 
+                  pep,
+                  g2 +theme(legend.position="none"),
+                  legendg2,
+                  labels=c("a", "b","c"), ncol = 2, nrow = 2, label_fontface = "bold",label_size=25,rel_widths = c(1,1))
+
+print(prow)
+# ggsave("/home/chrats/Desktop/bioreactor/community_OTUs_19_may.pdf",prow, units="in", width=12, height=10, dpi=300)
+
+
+```
+
+```{r PERMANOVA}
+#PERMANOVA analysis 
+library(microbiome)
+otu_cells<-as.matrix(otu_cells_wide[,-1])
+rownames(otu_cells)<-otu_cells_wide$sample
+conc<-as.data.frame(concentrations)
+rownames(conc)<-conc$sample
+otutax_u<-as.matrix(otutax[,4:ncol(otutax)])
+rownames(otutax_u)<-otutax$OTU
+
+
+library(phyloseq)
+data_otu<-phyloseq(sample_data(conc), otu_table(otu_cells,taxa_are_rows = F),tax_table(otutax_u))
+pseq.rel <- microbiome::transform(data_otu, "compositional")
+otu <- abundances(pseq.rel)
+meta <- meta(pseq.rel)
+
+
+library(vegan)
+permanova1 <- adonis(t(otu) ~ sampleclass,
+                    data = meta, permutations=999, method = "bray")
+
+# P-value
+print(as.data.frame(permanova1$aov.tab)["sampleclass", "Pr(>F)"])
+
+
+coef <- coefficients(permanova1)["sampleclass.L",]
+top.coef <- coef[rev(order(abs(coef)))[1:10]]
+par(mar = c(3, 14, 2, 1))
+barplot(sort(top.coef), horiz = T, las = 1, main = "Top OTUs")
+sign_otus1<-sort(top.coef)
+
+coef <- coefficients(permanova1)["sampleclass.Q",]
+top.coef <- coef[rev(order(abs(coef)))[1:10]]
+par(mar = c(3, 14, 2, 1))
+barplot(sort(top.coef), horiz = T, las = 1, main = "Top OTUs")
+sign_otus2<-sort(top.coef)
+##########
+apres <- apcluster(negDistMat(r=2), embedding, details=TRUE,q=0.1)
+class_umap<-rep(1,length(sampleclass))
+for (i in 1:length(apres@clusters)){
+  class_umap[apres@clusters[[i]]]<-i
+}
+meta$class_umap<-class_umap
+permanova2 <- adonis(t(otu) ~ class_umap,
+                    data = meta, permutations=999, method = "bray")
+
+
+######################################
+dist <- vegdist(t(otu))
+anova(betadisper(dist, meta$sampleclass))
+
+permutest(betadisper(dist, meta$sampleclass), pairwise = TRUE)
+
+coef <- coefficients(permanova2)["class_umap",]
+top.coef <- coef[rev(order(abs(coef)))[1:10]]
+par(mar = c(3, 14, 2, 1))
+barplot(sort(top.coef), horiz = T, las = 1, main = "Top OTUs")
+
+sign_otus3<-sort(top.coef)
+```
+## Random forest: The importance of the predciting variables is shown below
+```{r varImpSampleclass, fig.height=7}
+varImpPlot(rfclass$rf, n=10)
+nClass <- 10
+imp <- varimp(rfclass$rf)
+impo <- order(imp, decreasing=TRUE)
+sign_otus4<-sort(imp[impo[1:11]])
+sign_otus4<-sign_otus4[!names(sign_otus4)=="Days"]
+```
+
+
+```{r all_otus}
+# table with taxonomies
+all_otus<-unique(c(names(sign_otus1),names(sign_otus2),names(sign_otus4)))
+all_otus<-all_otus[!all_otus%in% c('OTU624837510','OTU91680185','OTU685366684','OTU717462002')]
+plotlist <- list()
+for (i in all_otus){
+  plotlist[[i]] <- ggplot(rfclass$data, aes_string(x=variable, y=i)) +
+    geom_boxplot(outlier.shape=NA, fill='grey90') +
+    geom_jitter(size=3, width=0.2, height=0) +
+    scale_y_continuous(trans = 'sqrt')  +
+    labs(x='Culture stage', y=paste('Abundance of',i))
+}
+all_otus<-tibble(OTU=all_otus)
+table<-all_otus %>% left_join(otutax) %>% select(OTU, Phylum,Class,Order, Family, Genus, Species)
+library(xtable)
+
+xtable(table)
+temp<-do.call(plot_grid, plotlist)
+# ggsave("/home/chrats/Desktop/bioreactor/OTUs_rest_supp.pdf",temp, units="in", width=12, height=10, dpi=300)
+```
+
+
+```{r tabImpVarSampleclass}
+# tabulate the important variables
+vi <- varimp(rfclass$rf)
+indices <- order(vi, decreasing=TRUE)[1:nClass]
+putimpOTUs <- names(vi)[indices]
+impOTUs <- tibble(OTU=putimpOTUs[putimpOTUs %in% names(otu_cells_wide)])
+impOTUs$importance <- seq.int(1,dim(impOTUs)[1])
+allimpOTUs <- c(allimpOTUs, impOTUs$OTU)
+
+knitr::kable(impOTUs %>% left_join(otutax) %>% select(OTU, importance, Family, Genus, Species)) %>% kable_styling(full_width=FALSE)
+```
+
+
+```{r plotOTUsampleclass, fig.width=10, fig.height=8}
+# When plotting the abundance of these OTU's as a function of culture cluster the correlation is clear:
+plotlist <- list()
+for (i in impOTUs$OTU){
+  plotlist[[i]] <- ggplot(rfclass$data, aes_string(x=variable, y=i)) +
+    geom_boxplot(outlier.shape=NA, fill='grey90') +
+    geom_jitter(size=3, width=0.2, height=0) +
+    scale_y_log10() +
+    labs(x='Culture stage', y=paste('Abundance of',i))
+}
+do.call(plot_grid, plotlist)
+```
+
+
+```{r sampleclasssTree, fig.width=10}
+# The tree shows that high importance of OTU624837510
+datasubset <- rfclass$data[c('varname', impOTUs$OTU)]
+set.seed(1764)
+treeClass <-ctree(varname ~ ., data=datasubset, controls=ctree_control(testtype = 'Univariate', mincriterion = 0.85))
+plot(treeClass, tp_args=list())
+```
+
+
+
+
+
+
+## Correlation of OTU's
+```{r OTUvsOTU}
+vartablew <- vartable %>%
+  spread(key=OTU, value=cells)
+p <- ggplot(vartablew, aes(x=OTU624837510, y=OTU717462002, colour=Benzene_mM)) +
+  scale_y_log10()+ scale_x_log10() + 
+  geom_point()
+
+print(p)
+```
