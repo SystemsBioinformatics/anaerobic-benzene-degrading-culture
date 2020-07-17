@@ -16,3 +16,7 @@ The Data folder contains the raw and normilized OTUs tables, taxonomy assignment
 ### Raw sequences
 Metagenomics shotgun \& 16S rRNA gene amplicon sequencing are available in the European Nucleotide Archive under primary accession PRJEB39357.
 
+### Licence
+The data and code in this repository is released under a [Creative Commons Attribution-ShareAlike 4.0 International Public License](https://creativecommons.org/licenses/by-sa/4.0/)
+
+
