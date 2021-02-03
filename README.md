@@ -7,7 +7,7 @@ A key question in microbial ecology is what the driving forces behind the persis
 In the bioreactor folder you can find Analysis_MAGs.Rmd code and the corresponding data (in the Data folder) to reproduce most if not all of the analysis and figures. 
 The Data folder contains files of mRNA samples mapped to each MAG, ORFs DNA sequnaces per MAG, KEGG selections for benzene degradation, tables of presence and absece of KOs/MAGs and KOs-mRNAs/MAGs, DNA abundaces (Anvi'o result), Summary per MAG, taxonomy assignments and total mapped mRNA count per sample.
 
-Metagenome-assembled genomes can be found in an Anvi'o result at zenodo open-access repository under http://doi.org/10.5281/zenodo.3939224
+Metagenome-assembled genomes can be found in an Anvi'o result at zenodo open-access repository under http://doi.org/10.5281/zenodo.3939224. To obtain the data, use anvi-summarize command. 
 
 ### Succesion experiment
 In the succesion experiment folder you can find Analysis_succession.Rmd code and the corresponding data (in the Data folder) to reproduce most if not all of the analysis and figures. 
