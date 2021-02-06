@@ -35,7 +35,7 @@ library(tidyr)
 library(party) # provides random forest and ctree algorithms
 
 # data locations, include the path to the Data folder of succession experiment
-datadir <- '...' 
+datadir <- '/home/chrats/Desktop/Git/anaerobic-benzene-degrading-culture/succession_experiment/Data/' 
 concentrations_file <- '2_Environmentaldata_NoIn_1701.txt'
 OTUabundance_file <- '3_otu_table_Normalized_all.xls'
 OTUtaxonomy_file <- '1_CorrectionValues_rRNAperCell_taxonomy.xlsx'
@@ -51,7 +51,7 @@ rownames(concentrations) <- concentrations$sample
 
 # OTU abundances
 otucounts <- read_excel(file.path(datadir,OTUabundance_file), sheet='Bef_Norm') %>%
-  rename(OTU = "Ids") %>%
+  dplyr::rename(OTU = "Ids") %>%
   gather(key='sample', value='count', -OTU) %>%
   filter(OTU != 'total')
 
@@ -118,13 +118,7 @@ kable(d, digits=3) %>% kable_styling(full_width = FALSE)
 ## Decreasing nitrate concentrations: three clusters of cultures
 
 
-```{r sampleclasses}
-sampleclass <- rep('Stage 3', dim(concentrations)[1])
-sampleclass[concentrations$Nitrate_mM > l2[1] + l2[2]*concentrations$Days] <- 'Stage 2'
-sampleclass[concentrations$Nitrate_mM > l1[1] + l1[2]*concentrations$Days] <- 'Stage 1'
-concentrations$sampleclass <- factor(sampleclass, ordered=TRUE, levels=c('Stage 1','Stage 2','Stage 3'))
 
-```
 
 
 ```{r nitratedev, fig.width=7}
@@ -146,7 +140,13 @@ p <- ggplot(concentrations, aes(x=Days, y=Nitrate_mM, colour=Benzene_mM,shape=sa
 print(p)
 ```
 
+```{r sampleclasses}
+sampleclass <- rep('Stage 3', dim(concentrations)[1])
+sampleclass[concentrations$Nitrate_mM > l2[1] + l2[2]*concentrations$Days] <- 'Stage 2'
+sampleclass[concentrations$Nitrate_mM > l1[1] + l1[2]*concentrations$Days] <- 'Stage 1'
+concentrations$sampleclass <- factor(sampleclass, ordered=TRUE, levels=c('Stage 1','Stage 2','Stage 3'))
 
+```
 ## Nitrite concentrations increase
 
 
@@ -229,7 +229,7 @@ library(patchwork)
 library(scales)
 
 expm1_trans <-  function() trans_new("expm1", "expm1", "log1p")
-size_all<-15
+size_all<-20
 pc <- ggplot(sel_data, aes(x=Nitrite_mM, y=value,colour=Carbon_source)) +scale_color_manual(values=c('#fc8d62','#8da0cb','#66c2a5'))+
   scale_y_continuous(sec.axis = sec_axis(trans=~.*1,  labels = NULL, name=expression(paste("Benzene (", mu, "M)"))))+
   stat_smooth(method = "gam", formula = y ~ s(x), size = 1.5,se =F)+
@@ -244,24 +244,42 @@ print(pc)
 ```{r all_carbon}
 #Carbon sources of microbial communities supplementary
 library(viridis)
+size_all<-20
 sc1<-ggplot(concentrations, aes(x=Nitrite_mM, y=Benzene_mM, colour=Days, shape=sampleclass)) +scale_colour_viridis()+
   geom_point(size=3) +
-  labs(x='Nitrite (mM)', y='Benzene (mM)', colour='Days', shape='Culture stage ')
+  labs(x='Nitrite (mM)', y='Benzene (mM)', colour='Days', shape='Culture stage ')+ theme(text = element_text(size=size_all),plot.title = element_text(size=size_all),
+axis.title.x = element_text(size=size_all),axis.title.y = element_text( size=size_all), 
+legend.title = element_text(size=size_all),legend.text = element_text(size=size_all))
+
 sc2<-ggplot(concentrations, aes(x=Nitrite_mM, y=Vitamin_B12_pM, colour=Days, shape=sampleclass)) +scale_colour_viridis()+
   geom_point(size=3) +
-  labs(x='Nitrite (mM)', y='Vitamin B12 (pM)', colour='Days', shape='Culture stage ') 
+  labs(x='Nitrite (mM)', y='Vitamin B12 (pM)', colour='Days', shape='Culture stage ') + theme(text = element_text(size=size_all),plot.title = element_text(size=size_all),
+axis.title.x = element_text(size=size_all),axis.title.y = element_text( size=size_all), 
+legend.title = element_text(size=size_all),legend.text = element_text(size=size_all))
+
 sc3<-ggplot(concentrations, aes(x=Nitrite_mM, y=Biotin_pM, colour=Days, shape=sampleclass)) +scale_colour_viridis()+
   geom_point(size=3) +
-  labs(x='Nitrite (mM)', y='Biotin (pM)', colour='Days', shape='Culture stage ') 
+  labs(x='Nitrite (mM)', y='Biotin (pM)', colour='Days', shape='Culture stage ') + theme(text = element_text(size=size_all),plot.title = element_text(size=size_all),
+axis.title.x = element_text(size=size_all),axis.title.y = element_text( size=size_all), 
+legend.title = element_text(size=size_all),legend.text = element_text(size=size_all))
+
 sc4<-ggplot(concentrations, aes(x=Nitrite_mM, y=Nicotinic_acid_pM, colour=Days, shape=sampleclass)) +scale_colour_viridis()+
   geom_point(size=3) +
-  labs(x='Nitrite (mM)', y='Nicotinic acid (pM)', colour='Days', shape='Culture stage ') 
+  labs(x='Nitrite (mM)', y='Nicotinic acid (pM)', colour='Days', shape='Culture stage ') + theme(text = element_text(size=size_all),plot.title = element_text(size=size_all),
+axis.title.x = element_text(size=size_all),axis.title.y = element_text( size=size_all), 
+legend.title = element_text(size=size_all),legend.text = element_text(size=size_all))
+
 sc5<-ggplot(concentrations, aes(x=Nitrite_mM, y=Pantothenic_acid_pM, colour=Days, shape=sampleclass)) +scale_colour_viridis()+
   geom_point(size=3) +
-  labs(x='Nitrite (mM)', y='Pantothenic acid (pM)', colour='Days', shape='Culture stage ') 
+  labs(x='Nitrite (mM)', y='Pantothenic acid (pM)', colour='Days', shape='Culture stage ') + theme(text = element_text(size=size_all),plot.title = element_text(size=size_all),
+axis.title.x = element_text(size=size_all),axis.title.y = element_text( size=size_all), 
+legend.title = element_text(size=size_all),legend.text = element_text(size=size_all))
+
 sc6<-ggplot(concentrations, aes(x=Nitrite_mM, y=p_Aminobenzoic_acid_pM, colour=Days, shape=sampleclass)) +scale_colour_viridis()+
   geom_point(size=3) +
-  labs(x='Nitrite (mM)', y='p Aminobenzoic acid (mM)', colour='Days', shape='Culture stage ') 
+  labs(x='Nitrite (mM)', y='p Aminobenzoic acid (mM)', colour='Days', shape='Culture stage ') + theme(text = element_text(size=size_all),plot.title = element_text(size=size_all),
+axis.title.x = element_text(size=size_all),axis.title.y = element_text( size=size_all), 
+legend.title = element_text(size=size_all),legend.text = element_text(size=size_all))
 
 legend_sc <- get_legend(sc1)
 prow <- plot_grid(sc4 + theme(legend.position="none"),
@@ -273,25 +291,28 @@ prow <- plot_grid(sc4 + theme(legend.position="none"),
                   labels=c("a", "b","c","d","e","f"), ncol = 2, nrow = 3, label_fontface = "bold",label_size=25,rel_widths = c(2,2),align = "v")
 prowf<-plot_grid(prow,legend_sc,ncol = 2, nrow = 1,rel_widths = c(2,.5),rel_heights = c(1,5))
 print(prowf)
-# ggsave("/home/chrats/Desktop/bioreactor/all_carbon.pdf",prowf, units="in", width=14, height=15, dpi=300)
+# ggsave(".../35S.pdf",prowf, units="in", width=14, height=15, dpi=600)
 ```
 
 ## Nitrite production over time
 
 ```{r nitrite_rate, fig.width=10, fig.height=10}
+size_all<-20
 ng<-ggplot(concentrations, aes(x=Days, y=Nitrite_mM, colour=Benzene_mM, shape=sampleclass)) +scale_colour_gradient(low='#8da0cb',high='#fc8d62')+
   geom_jitter(size=3, height=0, width=0.2) + geom_smooth(method = "lm", alpha = .1, size = .6,color="black",formula = y ~ poly(x, 2))+
-  labs(x='Time (days)', y='Nitrite (mM)', colour='Benzene (mM)', shape='Culture stage ')
+  labs(x='Time (days)', y='Nitrite (mM)', colour='Benzene (mM)', shape='Culture stage ')+ theme(text = element_text(size=size_all),plot.title = element_text(size=size_all),
+axis.title.x = element_text(size=size_all),axis.title.y = element_text( size=size_all), 
+legend.title = element_text(size=size_all),legend.text = element_text(size=size_all))
 print(ng)
 # second order (quadratic) polynomial.
-# ggsave("/home/chrats/Desktop/bioreactor/nitrite_rates.pdf",ng, units="in", width=14, height=5, dpi=300)
+# ggsave(".../36S.pdf",ng, units="in", width=6, height=5, dpi=600)
 ```
 
 ## main figure 3 of the manuscript (metabolomics)
 ```{r all, fig.width=10, fig.height=10}
 
 data_suc<-concentrations
-size_all<-15
+size_all<-20
 data_suc$total_cells<-cell_conc$total_cells
 
 p1 <- ggplot(concentrations, aes(x=Days, y=Nitrate_mM, colour=Benzene_mM,shape=sampleclass)) +
@@ -336,7 +357,7 @@ prow <- plot_grid(p1 + theme(legend.position="none"),
                   labels=c("a", "b","c","d"), ncol = 2, nrow = 2, label_fontface = "bold",label_size=25,rel_widths = c(2,2),align = "v")
 prowf<-plot_grid(prow,prow_leg,ncol = 2, nrow = 1,label_size=25,rel_widths = c(2,.5))
 print(prowf)
-# ggsave("/home/chrats/Desktop/bioreactor/succesion_exp_F_v2.pdf",prowf, units="in", width=14, height=10, dpi=300)
+# ggsave(".../03.pdf",prowf, units="in", width=14, height=10, dpi=600)
 
 
 
@@ -498,7 +519,7 @@ vartable <- otu_cells %>%
 vartable$OTU<-factor(vartable$OTU,levels =c('OTU624837510','OTU91680185','OTU685366684','OTU717462002'))
 p <- ggplot(vartable, aes(x=sampleclass, y=cells)) +geom_boxplot(outlier.shape = NA)+
   geom_point(position = "jitter",size=2) +
-  facet_wrap(.~OTU, scales='free')+labs(x="culture stage",y="cells per mL")+ scale_y_continuous(trans = 'sqrt')+  theme(text = element_text(size=size_all),
+  facet_wrap(.~OTU, scales='free')+labs(x="culture stage",y="cells per mL")+ scale_y_continuous(trans = 'sqrt')+  theme(text = element_text(size=size_all),axis.text.x = element_text(angle = 45,vjust = 1, hjust=1),
         plot.title = element_text(size=size_all),
         axis.title.x = element_text(size=size_all),
         axis.title.y = element_text( size=size_all), 
@@ -556,7 +577,7 @@ data_dist$dummy <- NA
 
 pep<-ggplot(data_dist, aes(x=sampleClass, y=ratio)) +geom_boxplot(outlier.shape = NA)+
   geom_point(position = "jitter",size=3) +labs(x="culture stage",y="ratio cells per mL")+ 
-  scale_y_continuous(trans = 'sqrt')+  theme(text = element_text(size=size_all),
+  scale_y_continuous(trans = 'sqrt')+  theme(text = element_text(size=size_all),axis.text.x = element_text(angle = 45,vjust = 1, hjust=1),
 plot.title = element_text(size=size_all),
 axis.title.x = element_text(size=size_all),
 axis.title.y = element_text( size=size_all), 
@@ -574,7 +595,7 @@ prow <- plot_grid(
                   labels=c("a", "b","c"), ncol = 2, nrow = 2, label_fontface = "bold",label_size=25,rel_widths = c(1,1))
 
 print(prow)
-# ggsave("/home/chrats/Desktop/bioreactor/community_OTUs_19_may.pdf",prow, units="in", width=12, height=10, dpi=300)
+# ggsave(".../04.pdf",prow, units="in", width=12, height=12, dpi=600)
 
 
 ```
@@ -669,7 +690,7 @@ library(xtable)
 
 xtable(table)
 temp<-do.call(plot_grid, plotlist)
-# ggsave("/home/chrats/Desktop/bioreactor/OTUs_rest_supp.pdf",temp, units="in", width=12, height=10, dpi=300)
+# ggsave(".../OTUs_rest_supp.pdf",temp, units="in", width=12, height=10, dpi=300)
 ```
 
 
