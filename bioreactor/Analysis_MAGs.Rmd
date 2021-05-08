@@ -28,7 +28,7 @@ opts_chunk$set(
 ################################################################################################
 ########### Add in variabe dir the path to Data from the bioreactor samples and on table5 chunk.
 ################################################################################################
-dir<-".../anaerobic-benzene-degrading-culture/bioreactor/Data"
+dir<-"/home/chrats/Desktop/Git/anaerobic-benzene-degrading-culture/bioreactor/Data"
 rna_count <- read.csv(paste(dir,"/total_mRNA_perSample.csv",sep = ""))
 rna_reads<-as.vector(rna_count)
 rna_reads<-rna_reads[-1]
@@ -126,7 +126,7 @@ axis_maxb <-max(c(data_log$mean_bin_rna_coverage,data_log$abuandances))
 axis_minl <- min(c(data_log$biofilm_rna,data_log$liguid_rna))
 axis_maxl <-max(c(data_log$biofilm_rna,data_log$liguid_rna))
 data_log$bins<-gsub("bin_","",data_log$bins)
-size_all<-15
+size_all<-20
 colors_gb<-c("grey60","black")
 p1<-ggplot(data_log, aes(x=abuandances, y=biofilm_rna,shape=accepted,color=accepted))+ylim(c(axis_minl,axis_maxl))+
   geom_point(size=3)+scale_shape_manual("Bin quality",values=c(15,19))+scale_color_manual("Bin quality",values=colors_gb)+
@@ -187,9 +187,9 @@ data$liguid_rna_norm_log<-log2((data$liguid_rna/data$genome_size)*mean(data$geno
 data$biofilm_rna_norm<-(data$biofilm_rna/data$genome_size)*mean(data$genome_size)
 data$liguid_rna_norm<-(data$liguid_rna/data$genome_size)*mean(data$genome_size)
 data$ratio_B_L_norm<-log2(((data$biofilm_rna/data$genome_size)*mean(data$genome_size))/((data$liguid_rna/data$genome_size)*mean(data$genome_size)))
-                                                                                                                                                                                                                                                                   
-levels(data$accepted) <- c("Bad", "Good")
-data_good<-data[which(data$accepted=="Good"),]
+                                                                                                                                     data$accepted<-as.factor(data$accepted)                                                                                                                              
+levels(data$accepted) <- c("Low", "High")
+data_good<-data[which(data$accepted=="High"),]
 axis_min <- min(c(data$biofilm_rna_norm_log,data$liguid_rna_norm_log))
 axis_max <-max(c(data$biofilm_rna_norm_log,data$liguid_rna_norm_log))
 
@@ -199,9 +199,9 @@ dataf<-data[!data$genome_size<10^6,] # filter based on size
 
 q1<-ggplot(dataf, aes(x=liguid_rna_norm_log, y=biofilm_rna_norm_log,color=accepted)) +
   geom_point(aes(size=active_ratio))+xlim(axis_min, axis_max)+ylim(axis_min, axis_max)+scale_color_manual("MAG quality",values=c("grey60","black"))+
-  geom_text_repel(size=5,parse  = TRUE,box.padding = 0.4,data=subset(dataf, ((liguid_rna_norm_log > 9)&(biofilm_rna_norm_log > 9))),aes(label=bins))+
+  geom_text_repel(size=7,parse  = TRUE,box.padding = 0.4,data=subset(dataf, ((liguid_rna_norm_log > 9)&(biofilm_rna_norm_log > 9))),aes(label=bins))+
   geom_segment(aes(x = 1, y = 1, xend = 18, yend = 18),color="red")+
-  labs(size="Active Genes %",x="Specific RNA Abundance - Liquid",y="Specific RNA Abundance - Biofilm")+ theme(text = element_text(size=size_all),plot.title = element_text(size=size_all),
+  labs(size="T. Genes %",x="Specific RNA Abundance - Liquid",y="Specific RNA Abundance - Biofilm")+ theme(text = element_text(size=size_all),plot.title = element_text(size=size_all),
 axis.title.x = element_text(size=size_all),
 axis.title.y = element_text( size=size_all),
 legend.title = element_text(size=size_all),
@@ -232,7 +232,7 @@ rownames(Ra_sel)<-c("001","003","005","006","009","018","020")
 output <- read.delim(paste(dir,"/bins_summary.txt",sep = ""))
 output$bins<-substr(x =output$bins, 1,7)
 output<-output[,-2]
-path_orfn<-paste(dir,"/Bins_orfs_DNA",sep = "")
+path_orfn<-paste(dir,"/MAGs_orfs_DNA",sep = "")
 inp_total<-list.files(path = path_orfn)
 library(ShortRead)
 orf_count<-c()
@@ -371,23 +371,35 @@ names(ratio_ko_orfs)<-df_big$names
 df_big$ratio_ko_orfs<-ratio_ko_orfs
 
 df_big$group_dna<-gsub("_"," ",df_big$group_dna)
-size_all<-15
+size_all<-20
 df_big$Groups<-df_big$group_dna
 df_big$Groups[grep("3|8",df_big$Groups)]<-"Group A"
 df_big$Groups[grep("6|7|4",df_big$Groups)]<-"Group B"
 df_big$Groups[grep("2|5|1",df_big$Groups)]<-"Group C"
 
+
 umap<-ggplot(df_big,aes(x=V1,y=V2))+scale_colour_manual(name="Clusters", values= colors_same)+scale_shape_manual(values=c(19,18))+
-  geom_point(aes(color=group_dna,shape=Best),size=4,stroke=2)+stat_ellipse(aes(x=V1, y=V2,lty=Groups, group=Groups),type = "norm")+scale_linetype_manual(values=c(3,2,1))+
-  guides(colour = guide_legend(override.aes = list(size=4)),shape = guide_legend(override.aes = list(size=4)))+ labs(shape="Transcribed KO ratio",x="UMAP1",y="UMAP2")+
-  geom_text_repel(size=4,parse  = TRUE,aes(label=names,color=group_dna),point.padding = 0.3)+ theme(text = element_text(size=size_all),
-                                                                                                    plot.title = element_text(size=size_all),
-                                                                                                    axis.title.x = element_text(size=size_all),
-                                                                                                    axis.title.y = element_text( size=size_all), 
-                                                                                                    legend.title = element_text(size=size_all),
-                                                                                                    legend.text = element_text(size=size_all))+
+  geom_point(aes(color=group_dna,shape=Best),size=4,stroke=2)+
+  stat_ellipse(aes(x=V1, y=V2,lty=Groups, group=Groups),type = "norm")+
+  scale_linetype_manual(values=c(3,2,1))+
+  guides(colour = guide_legend(override.aes = list(size=4)),shape = guide_legend(override.aes = list(size=4)))+ 
+  labs(shape="T. KO ratio",x="UMAP1",y="UMAP2")+
+  geom_label_repel(data=subset(df_big, Best%in%"High"),aes( color=group_dna ,label =names),
+                  size=6,parse  = TRUE,
+                  label.padding =0.2, # additional padding around each point
+                  label.r = 0.5,
+                  force=2,
+                    label.size = 1,show.legend=FALSE,box.padding = 0.1,na.rm=TRUE,fill = alpha(c("white"),0.1)
+  ) +scale_fill_manual(name="", values= colors_same)+
+  theme(text = element_text(size=size_all),
+plot.title = element_text(size=size_all),
+axis.title.x = element_text(size=size_all),
+axis.title.y = element_text( size=size_all), 
+legend.title = element_text(size=size_all),
+legend.text = element_text(size=size_all))+
   geom_point(data=subset(df_big,df_big$Best=="High"),stroke=1.5,color="black")
-plot(umap)
+  plot(umap)
+
 ```
 ## Main figure 1 of the manuscript:
 
@@ -398,13 +410,13 @@ prow <- plot_grid(q1 + theme(legend.position="none"),
                   labels=c("a", "b"), ncol = 2, nrow = 1, label_fontface = "bold",label_size=25)
 legend1 <- get_legend(q1)
 legend2 <- get_legend(umap)
-prow2<-plot_grid(legend1,prow, legend2, rel_widths = c(.3,2, .5), ncol = 3, nrow = 1)
+prow2<-plot_grid(legend1,prow, legend2, rel_widths = c(.5,2, .5), ncol = 3, nrow = 1)
 
 # save_plot("one_two_update.pdf",prow2, base_width=16, base_height=5, dpi=300)
 # plot_grid(prow )
 # 
 # plot_grid(prow)
-# ggsave("one_two_update2.pdf",prow2, units="in", width=15, height=5, dpi=300)
+# ggsave("/home/chrats/Desktop/Git/new_figures/01.pdf",prow2, units="in", width=17, height=6, dpi=600)
 plot_grid(prow2)
 # dev.off()
 ```
@@ -931,7 +943,7 @@ table_reorder$group<-test
 table_reorder$group<-as.integer(table_reorder$group)
 dom_table_reorder<-table_reorder[which(table_reorder$dominant==2),]
 nodom_table_reorder<-table_reorder[which(!table_reorder$dominant==2),]
-size_all<-15
+size_all<-20
 pos <- position_jitter(width = 0.2, height = 0.2, seed = 1)
 s1<-ggplot(dom_table_reorder, aes(x= group, y=benzene_degradation,color=expressed)) +
   scale_colour_manual(values= colors_ratio,labels = c("Biofilm", "Liquid", "Biofilm/Liquid"))+

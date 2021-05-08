@@ -114,7 +114,13 @@ d <- data.frame(
 ```{r}
 kable(d, digits=3) %>% kable_styling(full_width = FALSE)
 ```
+```{r sampleclasses}
+sampleclass <- rep('Stage 3', dim(concentrations)[1])
+sampleclass[concentrations$Nitrate_mM > l2[1] + l2[2]*concentrations$Days] <- 'Stage 2'
+sampleclass[concentrations$Nitrate_mM > l1[1] + l1[2]*concentrations$Days] <- 'Stage 1'
+concentrations$sampleclass <- factor(sampleclass, ordered=TRUE, levels=c('Stage 1','Stage 2','Stage 3'))
 
+```
 ## Decreasing nitrate concentrations: three clusters of cultures
 
 
@@ -140,13 +146,7 @@ p <- ggplot(concentrations, aes(x=Days, y=Nitrate_mM, colour=Benzene_mM,shape=sa
 print(p)
 ```
 
-```{r sampleclasses}
-sampleclass <- rep('Stage 3', dim(concentrations)[1])
-sampleclass[concentrations$Nitrate_mM > l2[1] + l2[2]*concentrations$Days] <- 'Stage 2'
-sampleclass[concentrations$Nitrate_mM > l1[1] + l1[2]*concentrations$Days] <- 'Stage 1'
-concentrations$sampleclass <- factor(sampleclass, ordered=TRUE, levels=c('Stage 1','Stage 2','Stage 3'))
 
-```
 ## Nitrite concentrations increase
 
 
